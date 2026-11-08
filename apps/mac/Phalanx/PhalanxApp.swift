@@ -11,5 +11,6 @@ struct PhalanxApp: App {
                 .frame(minWidth: 640, minHeight: 400)
         }
         .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1280, height: 800)
     }
 }

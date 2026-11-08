@@ -10,12 +10,14 @@
 		A10000000000000000000001 /* PhalanxApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* PhalanxApp.swift */; };
 		A10000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* ContentView.swift */; };
 		A10000000000000000000003 /* Central.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* Central.swift */; };
+		A10000000000000000000004 /* GameView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* GameView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		A20000000000000000000001 /* PhalanxApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhalanxApp.swift; sourceTree = "<group>"; };
 		A20000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A20000000000000000000003 /* Central.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Central.swift; sourceTree = "<group>"; };
+		A20000000000000000000006 /* GameView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameView.swift; sourceTree = "<group>"; };
 		A20000000000000000000004 /* Phalanx.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Phalanx.entitlements; sourceTree = "<group>"; };
 		A20000000000000000000005 /* Phalanx.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Phalanx.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -45,6 +47,7 @@
 				A20000000000000000000001 /* PhalanxApp.swift */,
 				A20000000000000000000002 /* ContentView.swift */,
 				A20000000000000000000003 /* Central.swift */,
+				A20000000000000000000006 /* GameView.swift */,
 				A20000000000000000000004 /* Phalanx.entitlements */,
 			);
 			path = Phalanx;
@@ -125,6 +128,7 @@
 				A10000000000000000000001 /* PhalanxApp.swift in Sources */,
 				A10000000000000000000002 /* ContentView.swift in Sources */,
 				A10000000000000000000003 /* Central.swift in Sources */,
+				A10000000000000000000004 /* GameView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

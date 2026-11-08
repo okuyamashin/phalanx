@@ -40,6 +40,8 @@ final class Central: NSObject, ObservableObject {
     private var manager: CBCentralManager!
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var target: CBPeripheral?          // つなぐと決めた相手
+    private var targetName: String?            // その名前（相手の住所が変わったときに探し直すため）
+    private var attemptStart: Date?            // つなぎに行き始めた時刻
     private var stateChar: CBCharacteristic?
     private var lastSeq: UInt8?
     private var pruneTimer: Timer?
@@ -58,15 +60,17 @@ final class Central: NSObject, ObservableObject {
         guard let p = peripherals[id] else { return }
         if let t = target, t.identifier != id { manager.cancelPeripheralConnection(t) }
         target = p
+        targetName = name(of: p)
+        attemptStart = Date()
         lastSeq = nil
         link = .connecting(name(of: p))
-        log("つなぐ: \(name(of: p))")
+        log("つなぐ: \(name(of: p)) \(p.identifier) state=\(p.state.rawValue)")
         manager.connect(p)
     }
 
     func disconnect() {
         guard let t = target else { return }
-        target = nil
+        target = nil; targetName = nil; attemptStart = nil
         manager.cancelPeripheralConnection(t)
         link = .scanning
         startScan()
@@ -93,23 +97,57 @@ final class Central: NSObject, ObservableObject {
 
     private func prune() {
         let now = Date()
-        let kept = pads.filter { now.timeIntervalSince($0.lastSeen) < 4 || $0.id == target?.identifier }
+        let linkedId = target?.state == .connected ? target?.identifier : nil
+        let kept = pads.filter { now.timeIntervalSince($0.lastSeen) < 4 || $0.id == linkedId }
         if kept.count != pads.count { pads = kept }
+        // 最初のつなぎ込みが 8 秒たっても終わらなければ、あきらめてリストに戻る
+        if case .connecting = link, let t = target, t.state != .connected,
+           let s = attemptStart, now.timeIntervalSince(s) > 8 {
+            log("つながらないので、あきらめる")
+            disconnect()
+        }
+    }
+
+    // つなぎに行っている相手が、住所を変えて出直していたら（Android はアプリを起動し直すと
+    // 電波の住所が変わる）、同じ名前の新しい相手につなぎ直す
+    private func followRenamed(_ p: CBPeripheral, label: String) {
+        guard let t = target, t.state != .connected, t.identifier != p.identifier,
+              label == targetName else { return }
+        let oldSeen = pads.first(where: { $0.id == t.identifier })?.lastSeen ?? .distantPast
+        guard Date().timeIntervalSince(oldSeen) > 2 else { return } // 古いほうがまだ聞こえるなら待つ
+        log("住所が変わった相手につなぎ直す: \(label)")
+        manager.cancelPeripheralConnection(t)
+        target = p
+        attemptStart = Date()
+        manager.connect(p)
     }
 
     private func name(of p: CBPeripheral) -> String {
-        pads.first(where: { $0.id == p.identifier })?.name ?? p.name ?? "Phalanx"
+        pads.first(where: { $0.id == p.identifier })?.name ?? (p == target ? targetName : nil) ?? p.name ?? "Phalanx"
     }
 
+    // 動きの記録。原因を調べるため、アプリの保管場所の phalanx.log にも書く
+    // （~/Library/Containers/jp.engawa.phalanx/Data/Library/Application Support/phalanx.log）
     func log(_ s: String) {
+        let line = "\(Self.stamp.string(from: Date())) \(s)\n"
         #if DEBUG
         print("[Phalanx]", s)
         #endif
+        guard let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("phalanx.log")
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close()
+        } else {
+            try? line.data(using: .utf8)!.write(to: url)
+        }
     }
+    private static let stamp: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"; return f }()
 }
 
 extension Central: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        log("Bluetooth の状態: \(central.state.rawValue)")
         switch central.state {
         case .poweredOn:
             link = target.map { .reconnecting(name(of: $0)) } ?? .scanning
@@ -139,8 +177,14 @@ extension Central: CBCentralManagerDelegate {
             if label != "Phalanx" { pads[i].name = label }
         } else {
             pads.append(FoundPad(id: peripheral.identifier, name: label, rssi: r, lastSeen: Date()))
+            log("見つけた: \(label) \(peripheral.identifier) \(Int(r))dBm")
         }
         pads.sort { $0.rssi > $1.rssi }
+        followRenamed(peripheral, label: label)
+        // 確かめる用：起動の引数 -autoconnect "Pixel 4 XL" で、その名前の相手に自動でつなぐ
+        if target == nil, let want = UserDefaults.standard.string(forKey: "autoconnect"), want == label {
+            connect(peripheral.identifier)
+        }
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
@@ -169,6 +213,7 @@ extension Central: CBCentralManagerDelegate {
 
 extension Central: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        log("サービス: \(peripheral.services?.map { $0.uuid.uuidString } ?? []) error=\(error?.localizedDescription ?? "-")")
         guard let s = peripheral.services?.first(where: { $0.uuid == PhalanxBLE.service }) else {
             log("Phalanx のサービスがない"); manager.cancelPeripheralConnection(peripheral); return
         }
@@ -176,6 +221,7 @@ extension Central: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        log("特性: \(service.characteristics?.map { $0.uuid.uuidString } ?? []) error=\(error?.localizedDescription ?? "-")")
         for c in service.characteristics ?? [] {
             switch c.uuid {
             case PhalanxBLE.info: peripheral.readValue(for: c)   // 版を確かめる
@@ -186,6 +232,7 @@ extension Central: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        if let error { log("読めない: \(characteristic.uuid.uuidString) \(error.localizedDescription)") }
         guard let data = characteristic.value, let b = data.first else { return }
         switch characteristic.uuid {
         case PhalanxBLE.info:
@@ -206,6 +253,7 @@ extension Central: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        log("通知の設定: \(characteristic.uuid.uuidString) on=\(characteristic.isNotifying) error=\(error?.localizedDescription ?? "-")")
         guard characteristic.uuid == PhalanxBLE.thrust, characteristic.isNotifying else { return }
         log("合図を受け取れる")
         link = .linked(name(of: peripheral))
