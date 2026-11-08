@@ -115,6 +115,11 @@
   #link.slow .dot { background:#e0b25a; } #link.lag .dot { background:#e04848; }
   #link.showqr .qr, #link.showmark .mark { display:flex; }
   #link.inplay { top:46px; bottom:auto; }
+  /* スマホで進めたが、まだ音が出せないときの印。パソコンを一度クリックすると消える */
+  #mute { position:fixed; left:16px; bottom:14px; z-index:20; color:var(--gold); font-size:13px; letter-spacing:.2em;
+    text-shadow:0 1px 2px #000; animation: mutePulse 1.6s ease-in-out infinite; pointer-events:none; }
+  #mute.hidden { display:none; }
+  @keyframes mutePulse { 50% { opacity:.35; } }
 </style>
 </head>
 <body>
@@ -128,6 +133,7 @@
 </div>
 <div id="pips"></div>
 <div id="overlay"></div>
+<div id="mute" class="hidden">♪ CLICK</div>
 <div id="link"><div class="qr"><a target="_blank" rel="noopener"></a><span></span></div><div class="mark"><i class="dot"></i><span></span></div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/pixi.js@7.4.2/dist/pixi.min.js"></script>
@@ -465,21 +471,37 @@ function backToTitle() {
   game.reset(); dying.length = corpses.length = 0;
   showOverlay(); startTitleMusic();
 }
+// スマホのボタンで先に進んだときは、まだ音が出せない（ブラウザは、この画面で一度クリックかキー操作が
+// あるまで音を出させない）。そのときのパソコンでの最初の操作は、音を出すことだけに使う
+function soundLocked() { return entered && (!ac || ac.state !== 'running'); }
+function unlockSound() {
+  const a = audio();
+  if (game.S.phase === 'title' && titleAudio.paused) startTitleMusic();
+  if (a) a.resume().then(refreshMute, refreshMute);
+}
+const muteEl = document.getElementById('mute');
+function refreshMute() { muteEl.classList.toggle('hidden', !soundLocked()); }
+setInterval(refreshMute, 500);
 addEventListener('keydown', e => {
+  if (soundLocked() && (e.code === 'Space' || e.code === 'KeyR')) { e.preventDefault(); unlockSound(); return; }
   if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) doThrust(); }
   if (e.code === 'KeyR') { if (entered) backToTitle(); else { game.reset(); showOverlay(); } }
 });
 // タイトルや結果の画面の上からでも押せるよう、画面全体で受け取る
-addEventListener('pointerdown', e => { if (e.target.closest('#link')) return; e.preventDefault(); doThrust(); }, { passive: false });
+addEventListener('pointerdown', e => {
+  if (e.target.closest('#link')) return;
+  e.preventDefault();
+  if (soundLocked()) { unlockSound(); return; }
+  doThrust();
+}, { passive: false });
 
 // ===== スマホのコントローラー =====
-// スマホのボタンはスペースキーと同じ。ただし入口の画面では受け付けない
-// （ブラウザはこの画面で一度クリックかキー操作があるまで音を出させないため）
+// スマホのボタンはスペースキーと同じ。入口の画面からでも進める（音はパソコンを一度操作するまで出ない）
 const linkEl = document.getElementById('link');
 let linkStatus = 'connecting', sentPhase = null;
 let link = null; // hostLink は作る途中で onStatus を呼ぶので、先に宣言しておく
 link = hostLink({
-  onThrust: () => { if (entered) doThrust(); },
+  onThrust: () => { doThrust(); refreshMute(); },
   onStatus: st => {
     linkStatus = st;
     if (st === 'waiting') drawQr(link.padUrl, link.id);
