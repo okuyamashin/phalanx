@@ -11,6 +11,21 @@
     touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
   canvas { display:block; touch-action:none; }
   /* 右奥の砂煙と周辺の暗さ。キャンバスに毎回描くと重いので、上に重ねた板で表す */
+  /* 漂う砂ぼこり：キャンバスに描くと重いので、ゆっくり流れる板を2枚重ねる */
+  #dust { position:fixed; inset:0; pointer-events:none; overflow:hidden; }
+  #dust i { position:absolute; top:25%; left:0; width:200%; height:80%; opacity:.55;
+    background:
+      radial-gradient(ellipse 9% 14% at 8% 40%, rgba(230,205,160,.22), transparent 70%),
+      radial-gradient(ellipse 12% 10% at 22% 70%, rgba(230,205,160,.18), transparent 70%),
+      radial-gradient(ellipse 8% 16% at 37% 30%, rgba(230,205,160,.2), transparent 70%),
+      radial-gradient(ellipse 14% 12% at 49% 65%, rgba(230,205,160,.16), transparent 70%),
+      radial-gradient(ellipse 9% 14% at 58% 40%, rgba(230,205,160,.22), transparent 70%),
+      radial-gradient(ellipse 12% 10% at 72% 70%, rgba(230,205,160,.18), transparent 70%),
+      radial-gradient(ellipse 8% 16% at 87% 30%, rgba(230,205,160,.2), transparent 70%),
+      radial-gradient(ellipse 14% 12% at 99% 65%, rgba(230,205,160,.16), transparent 70%);
+    animation: drift 70s linear infinite; will-change: transform; }
+  #dust i:nth-child(2) { top:45%; animation-duration:110s; animation-delay:-40s; opacity:.4; }
+  @keyframes drift { from { transform:translateX(-50%); } to { transform:translateX(0); } }
   #air { position:fixed; inset:0; pointer-events:none;
     background:
       radial-gradient(ellipse 60% 55% at 50% 50%, transparent 55%, rgba(20,10,0,.55) 100%),
@@ -91,6 +106,7 @@
 <body>
 <canvas id="c"></canvas>
 <div id="air"></div>
+<div id="dust"><i></i><i></i></div>
 <div id="hud">
   <span class="side"><i class="ico aspis"></i><b id="ally"></b></span>
   <div id="gauge"><div id="gaugeFill"></div></div>
@@ -106,8 +122,11 @@ import { CFG, createGame } from './src/game.js';
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');
 let W = 0, H = 0;
+// 描画の細かさ。スマホ（指で操作する端末）は画面がとても細かいので少し下げて、塗る量を減らす
+let DPR = 1;
 function resize() {
-  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const coarse = matchMedia('(pointer: coarse)').matches;
+  const dpr = DPR = Math.min(devicePixelRatio || 1, coarse ? 1.25 : 1.5);
   W = innerWidth; H = innerHeight;
   cv.width = W * dpr; cv.height = H * dpr;
   cv.style.width = W + 'px'; cv.style.height = H + 'px';
@@ -125,8 +144,22 @@ function loadSprite(name) {
   const s = SPRITES[name];
   return Promise.all([
     fetch(`assets/sprites/${name}.json`).then(r => r.json()).then(m => { s.meta = m; }),
-    new Promise((ok, ng) => { s.img = new Image(); s.img.onload = ok; s.img.onerror = ng; s.img.src = `assets/sprites/${name}.png`; }),
-  ]);
+    new Promise((ok, ng) => { s.img = new Image(); s.img.onload = ok; s.img.onerror = ng; s.img.src = `assets/sprites/${name}.webp`; }),
+  ]).then(() => { s.levels = makeLevels(s.img); });
+}
+// 奥の小さな兵を描くとき、大きな絵をその都度縮めると重いので、半分・4分の1の絵を先に作っておく
+function makeLevels(img) {
+  const levels = [{ src: img, scale: 1 }];
+  let prev = img, scale = 1;
+  for (let i = 0; i < 2; i++) {
+    scale /= 2;
+    const c = document.createElement('canvas');
+    c.width = Math.ceil(img.width * scale); c.height = Math.ceil(img.height * scale);
+    const g = c.getContext('2d'); g.imageSmoothingQuality = 'high';
+    g.drawImage(prev, 0, 0, c.width, c.height);
+    levels.push({ src: c, scale }); prev = c;
+  }
+  return levels;
 }
 const BODY_PX = 330;   // 手前の兵の身長（unit=1のときの画面px）
 
@@ -444,23 +477,32 @@ function enemyFrame(e) {
 
 // ===== 描画 =====
 function drawFrame(sprite, name, x, y, unit, alpha = 1) {
-  const { img, meta } = SPRITES[sprite];
+  const { meta, levels } = SPRITES[sprite];
   const f = meta.frames[name];
   const k = unit * BODY_PX / meta.height;
+  // 画面上の大きさに足りる、いちばん小さい絵を使う
+  const need = k * DPR;
+  const L = need <= 0.25 ? levels[2] : need <= 0.5 ? levels[1] : levels[0];
+  const m = L.scale;
   ctx.globalAlpha = alpha;
-  ctx.drawImage(img, f.x, f.y, f.w, f.h, x - f.anchor * k, y - f.baseline * k, f.w * k, f.h * k);
+  ctx.drawImage(L.src, f.x * m, f.y * m, f.w * m, f.h * m, x - f.anchor * k, y - f.baseline * k, f.w * k, f.h * k);
   ctx.globalAlpha = 1;
 }
 function shadow(x, y, unit, w, a = 0.35) {
   ctx.fillStyle = `rgba(30,18,8,${a})`;
   ctx.beginPath(); ctx.ellipse(x, y - 2 * unit, w * unit, 18 * unit, -0.05, 0, Math.PI * 2); ctx.fill();
 }
+// 足元の合図の光は、先に1枚ずつ作っておいて使い回す
+const CUE_IMG = {};
+for (const [name, c] of [['red', '255,70,50'], ['gold', '255,215,110']]) {
+  const cv2 = document.createElement('canvas'); cv2.width = 128; cv2.height = 64;
+  const g = cv2.getContext('2d'), r = g.createRadialGradient(64, 32, 0, 64, 32, 64);
+  r.addColorStop(0, `rgba(${c},0.8)`); r.addColorStop(1, `rgba(${c},0)`);
+  g.setTransform(1, 0, 0, 0.5, 0, 16); g.fillStyle = r; g.fillRect(0, 0, 128, 64);
+  CUE_IMG[name] = cv2;
+}
 function cue(x, y, unit, color) {
-  const c = color === 'red' ? '255,70,50' : '255,215,110';
-  const g = ctx.createRadialGradient(x, y, 0, x, y, 95 * unit);
-  g.addColorStop(0, `rgba(${c},0.8)`); g.addColorStop(1, `rgba(${c},0)`);
-  ctx.fillStyle = g;
-  ctx.beginPath(); ctx.ellipse(x, y, 95 * unit, 26 * unit, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.drawImage(CUE_IMG[color], x - 95 * unit, y - 26 * unit, 190 * unit, 52 * unit);
 }
 function drawUnit(side, file, rank, fr, now) {
   const ally = side === 'ally';
@@ -468,6 +510,7 @@ function drawUnit(side, file, rank, fr, now) {
   const p = project(file, slotX(side, rank), rank * 16);
   const en = rank === 0 ? enter[side][file] : 0;
   const x = p.x + (fr.dx + (ally ? -1 : 1) * RANK_GAP * ease(en)) * p.unit;
+  if (x < -420 * p.unit || x > W + 420 * p.unit) return; // 画面の外は描かない
   const breathe = fr.breathe ? Math.sin(now * 2.2 + file * 1.7 + rank) * 1.5 * p.unit : 0;
   shadow(x + (ally ? 50 : -50) * p.unit, p.y, p.unit, 100);
   if (fr.cue) cue(x - 50 * p.unit, p.y, p.unit, fr.cue);
@@ -478,10 +521,9 @@ function drawUnit(side, file, rank, fr, now) {
 
 // 背景
 const hills = Array.from({ length: 9 }, (_, i) => ({ x: i / 8, h: rand(0.05, 0.12), w: rand(0.15, 0.3) }));
-const motes = Array.from({ length: 36 }, () => ({ x: Math.random(), y: rand(0.3, 1), r: rand(30, 110), v: rand(0.004, 0.02), a: rand(0.05, 0.12) }));
 // 重い塗り（全画面のグラデーション）は、画面サイズが変わったときだけ別のキャンバスに描いておく
 function layer(draw) {
-  const c = document.createElement('canvas'), dpr = Math.min(devicePixelRatio || 1, 2);
+  const c = document.createElement('canvas'), dpr = DPR;
   c.width = Math.max(1, W * dpr); c.height = Math.max(1, H * dpr);
   const g = c.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); draw(g);
   return c;
@@ -513,13 +555,6 @@ function getLayers() {
   };
   return layers;
 }
-const moteImg = (() => {
-  const c = document.createElement('canvas'); c.width = c.height = 64;
-  const g = c.getContext('2d'), r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  r.addColorStop(0, 'rgba(230,205,160,1)'); r.addColorStop(1, 'rgba(230,205,160,0)');
-  g.fillStyle = r; g.fillRect(0, 0, 64, 64);
-  return c;
-})();
 // 地面：真上から見たテクスチャを、1〜2px の横帯ごとに奥行きに合わせて縮めて貼る
 const groundTex = new Image();
 let groundPat = null;
@@ -571,7 +606,8 @@ function draw(dt, now) {
       shadow(p.x, p.y, p.unit, 160, 0.3 * a);
       drawFrame(sprite, 'fallen', p.x, p.y + 6 * p.unit, p.unit, a);
     }
-    for (let r = SHOW_RANKS - 1; r >= 1; r--) {
+    // 横向きで大きく映すと、手前3列の後ろの兵は前の兵にほぼ隠れる。描くと重いだけなので省く
+    if (!(landscape() && f < 3)) for (let r = SHOW_RANKS - 1; r >= 1; r--) {
       if (r <= S.depth[f]) drawUnit('enemy', f, r, { a: 'guard', dx: 0, breathe: true }, now);
       if ((r - 1) * FILES + f < S.reserves) drawUnit('ally', f, r, { a: 'guard', dx: 0, breathe: true }, now);
     }
@@ -598,12 +634,6 @@ function draw(dt, now) {
     ctx.strokeStyle = '#000a'; ctx.lineWidth = 3;
     const y = p.y - t.y * p.unit;
     ctx.strokeText(t.text, p.x, y); ctx.fillText(t.text, p.x, y);
-  }
-  ctx.globalAlpha = 1;
-  for (const m of motes) {
-    m.x += m.v * dt; if (m.x > 1.1) m.x = -0.1;
-    ctx.globalAlpha = m.a;
-    ctx.drawImage(moteImg, m.x * W - m.r, m.y * H - m.r, m.r * 2, m.r * 2);
   }
   ctx.globalAlpha = 1;
 }

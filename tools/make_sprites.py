@@ -4,7 +4,7 @@
         python3 tools/make_sprites.py persian    # 指定したものだけ
 
 入力: assets/sprites/raw/ の緑背景（#00FF00）のシート
-出力: assets/sprites/<name>.png と <name>.json
+出力: assets/sprites/<name>.webp と <name>.json
 
 JSON の各フレーム:
   x, y, w, h   … 出力シート内の位置
@@ -155,7 +155,7 @@ def build(name, cfg):
     sheetW = sum(c['x1'] - c['x0'] for c in cells)
     sheetH = max(max(c['y1'], c['base'] + pad) - c['y0'] for c in cells)
     sheet = np.zeros((sheetH, sheetW, 4), np.float32)
-    meta = dict(image=f'{name}.png', facing=cfg['facing'], height=int(np.median(heights)), frames={})
+    meta = dict(image=f'{name}.webp', facing=cfg['facing'], height=int(np.median(heights)), frames={})
     ox = 0
     for c in cells:
         w, h = c['x1'] - c['x0'], c['y1'] - c['y0']
@@ -169,7 +169,9 @@ def build(name, cfg):
         meta['frames'][c['name']] = dict(x=int(ox), y=0, w=int(w), h=int(h), baseline=int(c['base'] - c['y0']),
                                          anchor=int(cfg['anchor'].get(c['name'], foot)))
         ox += w
-    Image.fromarray(np.clip(sheet, 0, 255).astype(np.uint8), 'RGBA').save(f'assets/sprites/{name}.png', optimize=True)
+    # WebP（透明あり）で保存。PNG の約1/10の大きさになる
+    Image.fromarray(np.clip(sheet, 0, 255).astype(np.uint8), 'RGBA').save(
+        f'assets/sprites/{name}.webp', 'WEBP', quality=85, method=6, alpha_quality=90)
     json.dump(meta, open(f'assets/sprites/{name}.json', 'w'), indent=1, ensure_ascii=False)
     print(name, json.dumps(meta['frames']), 'height', meta['height'], file=sys.stderr)
 

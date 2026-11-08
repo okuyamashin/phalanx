@@ -42,7 +42,7 @@ function loadSprite(name) {
   const s = SPRITES[name];
   return Promise.all([
     fetch(`assets/sprites/${name}.json`).then(r => r.json()).then(m => { s.meta = m; }),
-    new Promise((ok, ng) => { s.img = new Image(); s.img.onload = ok; s.img.onerror = ng; s.img.src = `assets/sprites/${name}.png`; }),
+    new Promise((ok, ng) => { s.img = new Image(); s.img.onload = ok; s.img.onerror = ng; s.img.src = `assets/sprites/${name}.webp`; }),
   ]);
 }
 const BODY_PX = 330; // 手前の兵の身長（画面上のpx、unit=1のとき）
