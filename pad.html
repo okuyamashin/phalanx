@@ -37,12 +37,16 @@
   /* 許可されなかった：◎ に斜線。iPhone では設定 → Safari → 詳細 → Web サイトデータの削除などで、もう一度聞かれる */
   html.motion-denied #sensor { display:inline; opacity:.35; text-decoration:line-through; }
   html.flat body.linked #btn { box-shadow:0 0 28px 2px #e0b25a55; border-color:#ffd88a; }
+  /* マイク：声で突ける。声の大きさで明るくなる */
+  #mic { display:none; margin-left:8px; vertical-align:-2px; color:#e0b25a; opacity:.35; }
+  html.voice-on #mic { display:inline-block; }
+  #mic svg { width:12px; height:14px; display:block; }
   #debug { position:fixed; bottom:10px; left:0; right:0; text-align:center; font:11px ui-monospace, Menlo, monospace; opacity:.6; }
   #btn.hit { transform:scale(.94); box-shadow:0 0 40px 6px #e0b25a66; transition:none; }
 </style>
 </head>
 <body>
-<div id="status"><span class="dot"></span><span id="txt">…</span><span id="sensor">◎</span><div id="detail"></div></div>
+<div id="status"><span class="dot"></span><span id="txt">…</span><span id="sensor">◎</span><span id="mic"><svg viewBox="0 0 12 14"><rect x="3.5" y="0.5" width="5" height="8" rx="2.5" fill="currentColor"/><path d="M1.5 6.5a4.5 4.5 0 0 0 9 0M6 11v2.5" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg></span><div id="detail"></div></div>
 <div id="debug"></div>
 <div id="btn"></div>
 
@@ -50,6 +54,7 @@
 <script type="module">
 import { padLink } from './src/link.js?v=5'; // ?v= を上げると、ブラウザに残った古いファイルを使わない
 import { motionThrust } from './src/motion.js?v=4';
+import { voiceThrust } from './src/voice.js?v=1';
 
 const hostId = location.hash.slice(1).replace(/[^a-z0-9]/g, '');
 const txt = document.getElementById('txt'), btn = document.getElementById('btn');
@@ -83,8 +88,13 @@ else link = padLink(hostId, {
   },
 });
 
-// 合図を送る。ボタンでも、平らにして突き出しても同じ
-function fire() {
+// 合図を送る。ボタンでも、平らにして突き出しても、声でも同じ。
+// ボタンを押した音や振動をセンサーやマイクが拾って二重に出ないよう、ボタン以外は直前の合図から少しあける
+let lastFire = 0;
+function fire(fromButton = false) {
+  const now = performance.now();
+  if (!fromButton && now - lastFire < 400) return;
+  lastFire = now;
   if (!link.thrust()) return;
   btn.classList.add('hit');
   if (navigator.vibrate) navigator.vibrate(15);
@@ -93,16 +103,28 @@ function fire() {
 // 押した瞬間に送る（離したときではない）
 btn.addEventListener('pointerdown', e => {
   e.preventDefault();
-  fire();
+  fire(true);
 });
-// センサーの許可は、指を離したときにしか頼めない（iPhone）
-btn.addEventListener('click', () => motion.start());
-addEventListener('touchend', () => motion.start());
+// センサーとマイクの許可は、指を離したときにしか頼めない
+const startSensors = () => { motion.start(); voice.start(); };
+btn.addEventListener('click', startSensors);
+addEventListener('touchend', startSensors);
 
 // 動きのセンサー。URL に ?jab=10 などを付けると、突き出しの強さのしきい値を変えられる
 const q = new URLSearchParams(location.search);
 const opts = {};
 if (q.has('jab')) opts.jab = Number(q.get('jab'));
+// 声。URL に ?voice=0.05 などを付けると、反応する声の大きさを変えられる
+const voiceOpts = q.has('voice') ? { level: Number(q.get('voice')) } : {};
+const voice = voiceThrust({
+  ...voiceOpts,
+  onThrust: () => fire(),
+  onState: st => document.documentElement.classList.toggle('voice-on', st === 'on'),
+});
+const micEl = document.getElementById('mic');
+setInterval(() => {
+  if (voice.state === 'on') micEl.style.opacity = (0.35 + 0.65 * Math.min(1, voice.level / voice.cfg.level)).toFixed(2);
+}, 50);
 const motion = motionThrust({
   ...opts,
   onThrust: fire,
@@ -117,7 +139,8 @@ const motion = motionThrust({
 // 調整用：URL に ?debug を付けると、平らかどうかと、最近いちばん強かった動きを出す
 if (q.has('debug')) setInterval(() => {
   document.getElementById('debug').textContent =
-    `${motion.state} · ${motion.flat ? 'flat' : 'tilt'} · peak ${motion.peak.toFixed(1)} / ${motion.cfg.jab}`;
+    `${motion.state} · ${motion.flat ? 'flat' : 'tilt'} · peak ${motion.peak.toFixed(1)} / ${motion.cfg.jab}` +
+    ` ｜ voice ${voice.state} · peak ${voice.peak.toFixed(3)} / ${voice.cfg.level} · floor ${voice.floor.toFixed(3)}`;
 }, 100);
 addEventListener('contextmenu', e => e.preventDefault());
 
