@@ -15,8 +15,12 @@
     padding:10px 16px; background:linear-gradient(#000000aa,#00000000); pointer-events:none; font-size:15px; text-shadow:0 1px 2px #000; }
   #gauge { flex:1; max-width:420px; margin:0 auto; height:10px; background:#ffffff30; border-radius:5px; overflow:hidden; }
   #gaugeFill { height:100%; width:50%; background:var(--gold); }
-  #mode { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); font-size:14px; letter-spacing:.2em;
-    text-shadow:0 1px 3px #000; pointer-events:none; }
+  #hud .side { display:flex; align-items:center; gap:8px; min-width:90px; }
+  #hud .side:last-child { justify-content:flex-end; }
+  #hud b, .stats b { font-family: Georgia, "Times New Roman", serif; font-weight:normal; font-size:20px; letter-spacing:.06em; }
+  .ico { display:inline-block; flex:none; box-shadow:0 1px 3px #000a; }
+  .ico.aspis { width:18px; height:18px; border-radius:50%; background:radial-gradient(circle at 40% 35%, #f0cf8a, #a8742c 60%, #6e4a1a); }
+  .ico.spara { width:12px; height:18px; border-radius:3px; background:repeating-linear-gradient(#d2ae74 0 2px, #8a6a3a 2px 4px); }
   #overlay { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
     background:#000000b0; text-align:center; padding:16px; }
   #overlay h1 { font-family: Georgia, serif; color:var(--gold); font-size:56px; margin:0 0 18px; letter-spacing:.08em; }
@@ -50,16 +54,17 @@
   @keyframes panL { from { transform:scale(1.18) translateX(6%); } to { transform:scale(1.18) translateX(-6%); } }
   @keyframes panR { from { transform:scale(1.18) translateX(-6%); } to { transform:scale(1.18) translateX(6%); } }
   #overlay.title h1 { font-size:84px; margin-bottom:6px; text-shadow:0 4px 16px #000; animation:endFade 1.4s ease-out both; }
-  #overlay.title .tag { font-size:19px; text-shadow:0 2px 6px #000; animation:endFade 1.4s .3s ease-out both; }
-  #overlay.title .howto { margin-top:auto; background:#0000009a; border-radius:12px; padding:10px 18px; max-width:680px; }
-  #overlay.title .start { margin:14px 0 4vh; font-size:18px; letter-spacing:.1em; animation:blink 1.6s ease-in-out infinite; }
+  #overlay.title .start { margin:auto 0 4px; font-family:Georgia, serif; font-size:30px; letter-spacing:.35em; color:#f2e8d2;
+    text-shadow:0 2px 8px #000; animation:blink 1.6s ease-in-out infinite; }
+  #overlay.title .key { margin:0 0 5vh; font-size:11px; letter-spacing:.3em; color:#f2e8d2aa; }
+  #overlay.end .stats { display:flex; align-items:center; gap:10px; font-size:20px; animation-delay:.4s; }
+  #overlay.end .again { font-size:28px; margin-top:10px; opacity:.8; }
   @keyframes blink { 50% { opacity:.35; } }
   @media (max-height: 500px) {
     #overlay.title { padding-top:3vh; }
     #overlay.title h1 { font-size:46px; }
-    #overlay.title .tag { font-size:14px; }
-    #overlay.title .howto p { font-size:12px; margin:2px 0; }
-    #overlay.title .start { margin:6px 0 2vh; font-size:14px; }
+    #overlay.title .start { font-size:22px; }
+    #overlay.title .key { margin-bottom:3vh; }
   }
   @keyframes endZoom { from { transform:scale(1.12); filter:brightness(.6); } to { transform:scale(1); filter:brightness(1); } }
   @keyframes endFade { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:none; } }
@@ -78,12 +83,11 @@
 <body>
 <canvas id="c"></canvas>
 <div id="hud">
-  <span id="ally">味方</span>
+  <span class="side"><i class="ico aspis"></i><b id="ally"></b></span>
   <div id="gauge"><div id="gaugeFill"></div></div>
-  <span id="foe">敵</span>
+  <span class="side"><b id="foe"></b><i class="ico spara"></i></span>
 </div>
-<div id="mode">盾</div>
-<div id="pips" title="手前→奥：各列の敵の様子"></div>
+<div id="pips"></div>
 <div id="overlay"></div>
 
 <script type="module">
@@ -185,13 +189,11 @@ const contactX = () => shift + GAP / 2;
 const game = createGame((type, i, why) => {
   if (type === 'thrust') {
     SFX.drum();
-    say(0, slotX('ally', 0) + 60, '突け！', '#e0b25a', 30, 170);
   } else if (type === 'blocked' || type === 'clash') {
     burst(i, contactX(), 260, '#fff2b0', type === 'clash' ? 5 : 8); SFX.clang();
   } else if (type === 'ourDeath') {
     dying.push({ side: 'ally', file: i, wx: slotX('ally', 0), t: 0 });
     burst(i, slotX('ally', 0) + 40, 230, '#8a1010', 12, 120);
-    say(i, slotX('ally', 0), why, '#ff8a7a');
     SFX.hurt(); if (i < 4) shake = Math.max(shake, 6);
   } else if (type === 'enemyDeath') {
     dying.push({ side: 'enemy', file: i, wx: slotX('enemy', 0), t: 0 });
@@ -383,6 +385,17 @@ function nextSlide() {
 function startSlides() { stopSlides(); slideIndex = -1; nextSlide(); slideTimer = setInterval(nextSlide, 7000); }
 function stopSlides() { clearInterval(slideTimer); slideTimer = null; }
 
+// ===== ギリシャ数字（イオニア式：Αʹ=1, Ιʹ=10, Ρʹ=100） =====
+const G_ONES = ['', 'Α', 'Β', 'Γ', 'Δ', 'Ε', 'Ϛ', 'Ζ', 'Η', 'Θ'];
+const G_TENS = ['', 'Ι', 'Κ', 'Λ', 'Μ', 'Ν', 'Ξ', 'Ο', 'Π', 'Ϟ'];
+const G_HUNDREDS = ['', 'Ρ', 'Σ', 'Τ', 'Υ', 'Φ', 'Χ', 'Ψ', 'Ω', 'Ϡ'];
+function greek(n) {
+  n = Math.max(0, Math.floor(n));
+  if (n === 0) return '—'; // ギリシャ数字には0がない
+  const th = Math.floor(n / 1000) % 10;
+  return (th ? '͵' + G_ONES[th] : '') + G_HUNDREDS[Math.floor(n / 100) % 10] + G_TENS[Math.floor(n / 10) % 10] + G_ONES[n % 10] + 'ʹ';
+}
+
 // ===== HUD・オーバーレイ =====
 const $ = id => document.getElementById(id);
 function showOverlay() {
@@ -395,37 +408,28 @@ function showOverlay() {
     ov.classList.add('title');
     ov.innerHTML = `<div id="slides">${TITLE_IMAGES.map(src => `<div style="background-image:url(${src})"></div>`).join('')}</div>
       <h1>PHALANX</h1>
-      <p class="tag">盾を並べて守れ。号令で一斉に突け。</p>
-      <div class="howto">
-        <p><b>スペースキー（スマホはタップ）</b>＝ 隊全体で突く　／　それ以外はずっと守り</p>
-        <p class="dim">足元が<span style="color:#ff6a5a">赤く光る敵</span>＝攻撃の構え（スキあり、でも来る）　
-        <span style="color:#ffe08a">金色</span>＝戻り中（狙いどき）<br>
-        盾を構えた敵に突くと、弾かれて反撃されることがある。突いている間は無防備。<br>
-        守ってばかりだと敵が増えて押され、崖から落とされる。</p>
-      </div>
-      <p class="start">スペース（スマホはタップ）で開始</p>
-      ${innerHeight > innerWidth ? '<p class="dim">スマホは横向きがおすすめです</p>' : ''}`;
+      <p class="start">ΑΡΧΗ</p>
+      <p class="key">SPACE · TAP</p>`;
     startSlides();
   } else {
     const win = S.phase === 'win';
     ov.classList.add('end', win ? 'win' : 'lose');
-    ov.innerHTML = `<div class="bg"></div><h1>${win ? '勝利' : '敗北'}</h1>
-      <p>${win ? `敵を崖から押し落とした（${S.endT.toFixed(1)}秒）` : (S.why === '隊が尽きた' ? '隊が尽き、崖から落とされた' : '押し切られ、崖から落とされた')}</p>
-      <p class="dim">倒した敵 ${S.kills}　失った味方 ${S.lost}　突撃 ${S.thrusts}回</p>
-      <p style="margin-top:18px">スペース（スマホはタップ）でもう一度</p>`;
+    ov.innerHTML = `<div class="bg"></div><h1>${win ? 'ΝΙΚΗ' : 'ΗΤΤΑ'}</h1>
+      <p class="stats"><i class="ico spara"></i><b>${greek(S.kills)}</b>　<i class="ico aspis"></i><b>${greek(S.lost)}</b></p>
+      <p class="again">↻</p>`;
   }
 }
 function updateHud() {
   const S = game.S;
-  $('ally').textContent = `味方 前列${S.ours.filter(o => o.alive).length}  予備${S.reserves}`;
-  $('foe').textContent = `敵 ${game.enemyTotal()}`;
+  $('ally').textContent = greek(S.ours.filter(o => o.alive).length + S.reserves);
+  $('foe').textContent = greek(game.enemyTotal());
   const p = (S.line - CFG.lineWin) / (CFG.lineLose - CFG.lineWin);
   $('gaugeFill').style.width = (100 * (1 - p)).toFixed(1) + '%';
   $('gaugeFill').style.background = p < 0.5 ? '#e0b25a' : p < 0.8 ? '#e07b39' : '#e04848';
   // 列ごとの敵の合図（赤＝構え・攻撃、金＝戻り、空＝敵がいない）。左が手前
   const pips = $('pips');
   if (!pips.childElementCount) {
-    pips.innerHTML = '<span>手前</span>' + Array.from({ length: FILES }, () => '<i></i>').join('') + '<span>奥</span>';
+    pips.innerHTML = Array.from({ length: FILES }, () => '<i></i>').join('');
   }
   const dots = pips.querySelectorAll('i');
   S.enemies.forEach((e, i) => {
@@ -433,10 +437,6 @@ function updateHud() {
   });
   pips.classList.toggle('hidden', S.phase !== 'play');
   $('hud').classList.toggle('hidden', S.phase !== 'play');
-  $('mode').classList.toggle('hidden', S.phase !== 'play');
-  const m = $('mode');
-  if (S.thrustT >= 0) { m.textContent = '― 突撃中（無防備）―'; m.style.color = '#ffb08a'; }
-  else { m.textContent = '盾'; m.style.color = '#f2e8d2'; }
 }
 
 // ===== ループ =====
