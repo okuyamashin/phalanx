@@ -41,6 +41,11 @@ SHEETS = {
         standing=['guard', 'windup', 'strike', 'recover', 'hit'],
         cuts=[], erase_dark=[], erase_steel=[],
         anchor={'collapse': 330, 'fallen': 300},
+        # 一部のコマを別の画像で差し替える。
+        # 画像は「元シートの (x0, y0) から切り出し、周りに pad の余白を足したもの」を
+        # AI で編集したもの。scale = 編集後の幅 / 編集前の幅
+        replace={'windup': dict(src='assets/sprites/raw/persian_windup_gemini.jpg',
+                                x0=340, y0=10, pad=160, scale=1920 / 695)},
     ),
 }
 
@@ -70,6 +75,29 @@ def label(mask):
                         lab[yy, xx] = n; q.append((yy, xx))
             comps.append(dict(id=n, size=len(xs), cx=float(np.mean(xs)), cy=float(np.mean(ys))))
     return lab, comps
+
+
+def replace_cell(c, r, pad):
+    """AI で編集した画像を、元シートと同じ縮尺・位置に戻してセルを差し替える"""
+    img = Image.open(r['src']).convert('RGB')
+    w, h = round(img.width / r['scale']), round(img.height / r['scale'])
+    im = np.asarray(img.resize((w, h), Image.LANCZOS))
+    rgb, alpha = chroma(im)
+    # 小さなゴミ（編集でできた四角など）を除き、大きな部品だけ残す
+    lab, comps = label(alpha > 0.5)
+    keep = [cc['id'] for cc in comps if cc['size'] > 200]
+    m = np.isin(lab, keep)
+    mm = m.copy()
+    for s in range(1, 3):
+        mm[s:] |= m[:-s]; mm[:-s] |= m[s:]; mm[:, s:] |= m[:, :-s]; mm[:, :-s] |= m[:, s:]
+    a = np.where(mm, alpha, 0)
+    ys, xs = np.nonzero(a > 0.02)
+    x0, x1 = max(0, xs.min() - pad), min(w, xs.max() + pad)
+    y0, y1 = max(0, ys.min() - pad), min(h, ys.max() + pad)
+    # 編集画像の (0,0) は元シートの (x0 - pad, y0 - pad)
+    ox, oy = r['x0'] - r['pad'], r['y0'] - r['pad']
+    c.update(rgb=rgb[y0:y1, x0:x1], a=a[y0:y1, x0:x1],
+             x0=ox + x0, x1=ox + x1, y0=oy + y0, y1=oy + y1)
 
 
 def build(name, cfg):
@@ -107,8 +135,14 @@ def build(name, cfg):
                 steel = (px[..., 0] > 80) & (px[..., 2] > 80) & (np.abs(px[..., 0] - px[..., 2]) < 40)
                 a[ey0:ey1, ex0:ex1] = np.where(steel, 0, a[ey0:ey1, ex0:ex1])
         ys, xs = np.nonzero(a > 0.02)
-        cells.append(dict(name=names[k], a=a, x0=max(0, xs.min() - pad), x1=min(W, xs.max() + pad),
-                          y0=max(0, ys.min() - pad), y1=min(H, ys.max() + pad), cy=cfg['frames'][k][2]))
+        x0, x1 = max(0, xs.min() - pad), min(W, xs.max() + pad)
+        y0, y1 = max(0, ys.min() - pad), min(H, ys.max() + pad)
+        cells.append(dict(name=names[k], rgb=rgb[y0:y1, x0:x1], a=a[y0:y1, x0:x1],
+                          x0=x0, x1=x1, y0=y0, y1=y1, cy=cfg['frames'][k][2]))
+
+    for c in cells:
+        if c['name'] in cfg.get('replace', {}):
+            replace_cell(c, cfg['replace'][c['name']], pad)
 
     # 足元の基準線：同じ段（y が近い）の立ちポーズのいちばん下
     for c in cells:
@@ -125,11 +159,11 @@ def build(name, cfg):
     ox = 0
     for c in cells:
         w, h = c['x1'] - c['x0'], c['y1'] - c['y0']
-        sl = (slice(c['y0'], c['y1']), slice(c['x0'], c['x1']))
-        sheet[:h, ox:ox + w, :3] = rgb[sl]
-        sheet[:h, ox:ox + w, 3] = c['a'][sl] * 255
+        sheet[:h, ox:ox + w, :3] = c['rgb']
+        sheet[:h, ox:ox + w, 3] = c['a'] * 255
         # 後ろ足：基準線付近の不透明ピクセルの端（右向きなら左端、左向きなら右端）
-        band = c['a'][c['base'] - 40:c['base'] + 1, c['x0']:c['x1']] > 0.5
+        bb = c['base'] - c['y0']
+        band = c['a'][max(0, bb - 40):bb + 1] > 0.5
         cols = np.nonzero(band.any(0))[0]
         foot = (int(cols.min()) if cfg['facing'] == 'right' else int(cols.max())) if len(cols) else w // 2
         meta['frames'][c['name']] = dict(x=int(ox), y=0, w=int(w), h=int(h), baseline=int(c['base'] - c['y0']),
