@@ -636,8 +636,7 @@ function draw(dt, now) {
       shadow(p.x, p.y, p.unit, 160, 0.3 * a);
       drawFrame(sprite, 'fallen', p.x, p.y + 6 * p.unit, p.unit, a);
     }
-    // 横向きで大きく映すと、手前3列の後ろの兵は前の兵にほぼ隠れる。描くと重いだけなので省く
-    if (!(landscape() && f < 3)) for (let r = SHOW_RANKS - 1; r >= 1; r--) {
+    for (let r = SHOW_RANKS - 1; r >= 1; r--) {
       if (r <= S.depth[f]) drawUnit('enemy', f, r, { a: 'guard', dx: 0, breathe: true }, now);
       if ((r - 1) * FILES + f < S.reserves) drawUnit('ally', f, r, { a: 'guard', dx: 0, breathe: true }, now);
     }
