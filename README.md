@@ -80,14 +80,13 @@ python3 tools/make_sprites.py persian    # 敵だけ
 | 兵士のスプライト、タイトル・勝敗の絵、設定画 | 作者が ChatGPT と Gemini で生成し、加工したもの | 各サービスの利用規約に従う |
 | 地面（`assets/textures/`） | [Poly Haven: Rocky Terrain 02](https://polyhaven.com/a/rocky_terrain_02)（Amal Kumar）を色調整 | CC0 |
 | 効果音（`assets/sounds/`） | [Kenney](https://kenney.nl) の Impact Sounds・RPG Audio | CC0 |
-| 勝利の曲（`assets/music/victory.mp3`） | 作者が Suno（有料プラン）で作曲 | 作者に帰属 |
+| 勝敗の曲（`assets/music/`） | 作者が Suno（有料プラン）で作曲 | 作者に帰属 |
 | 太鼓などの一部の音 | ブラウザ上でプログラムで合成 | MIT（コードの一部） |
 
 素材ごとの詳しい出典は、各フォルダの README に書いています。
 
 ## 今後の予定
 
-- 敗北の曲
 - スマホの加速度センサーをコントローラーにする（立てる＝守り、倒して突く＝突撃、その中間＝無防備）
 
 ## ライセンス
