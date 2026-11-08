@@ -23,6 +23,32 @@
   #overlay p { margin:6px 0; font-size:17px; line-height:1.5; }
   #overlay .dim { color:#c8bba0; font-size:15px; }
   .hidden { display:none !important; }
+  /* 勝敗の画面：崖から落とされる絵を背景に */
+  #overlay.end { justify-content:flex-start; padding-top:7vh; background:#000; overflow:hidden; }
+  #overlay.end .bg { position:absolute; inset:0; background-size:cover; background-position:center;
+    animation: endZoom 6s ease-out both; z-index:-1; }
+  #overlay.end::after { content:''; position:absolute; inset:0; z-index:-1;
+    background:linear-gradient(#000000b0, #00000020 40%, #00000000 65%, #000000c0); }
+  #overlay.end > * { position:relative; animation: endFade 1.2s ease-out both; }
+  #overlay.end p { text-shadow:0 2px 6px #000; }
+  #overlay.end h1 { font-size:72px; text-shadow:0 3px 12px #000; }
+  #overlay.win .bg { background-image:url(assets/screens/victory.jpg); }
+  #overlay.lose .bg { background-image:url(assets/screens/defeat.jpg); }
+  #overlay.lose { align-items:flex-start; text-align:left; padding-left:6vw; }  /* 敗北の絵は右上に敵がいるので文字は左へ */
+  #overlay.lose h1 { color:#e8d2b0; }
+  #overlay { isolation:isolate; }
+  @keyframes endZoom { from { transform:scale(1.12); filter:brightness(.6); } to { transform:scale(1); filter:brightness(1); } }
+  @keyframes endFade { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:none; } }
+  @media (max-height: 500px) { #overlay.end h1 { font-size:44px; margin-bottom:8px; } #overlay.end p { font-size:14px; margin:3px 0; } }
+  /* 奥の列の敵の様子（手前の兵に隠れて見えない分を補う） */
+  #pips { position:fixed; top:34px; left:50%; transform:translateX(-50%); display:flex; gap:5px; align-items:center;
+    padding:4px 8px; border-radius:10px; background:#00000055; pointer-events:none; }
+  #pips i { width:12px; height:12px; border-radius:50%; background:#ffffff30; box-shadow:0 0 0 1px #0006 inset; }
+  #pips i.red { background:#ff4a3a; box-shadow:0 0 8px #ff4a3a; }
+  #pips i.gold { background:#ffd46e; box-shadow:0 0 8px #ffd46e; }
+  #pips i.gap { background:transparent; box-shadow:0 0 0 1px #ffffff40 inset; }
+  #pips i.us { width:4px; border-radius:2px; height:12px; }
+  #pips span { font-size:11px; color:#f2e8d2aa; margin:0 4px; }
 </style>
 </head>
 <body>
@@ -33,6 +59,7 @@
   <span id="foe">敵</span>
 </div>
 <div id="mode">盾</div>
+<div id="pips" title="手前→奥：各列の敵の様子"></div>
 <div id="overlay"></div>
 
 <script type="module">
@@ -74,11 +101,16 @@ const RANK_GAP = 170;
 const LINE_PX = 0.9;             // 押し合いの位置（ルール）→ 画面のずれ
 let shift = 0;                   // 隊列全体の左右のずれ（押されると左へ）
 
+// 横向きは迫力重視：手前の兵が画面の高さの86%になる大きさ。縦向きは全体が見える大きさ。
+// URLに ?zoom=0.6 のように付けると、さらに倍率を掛けられる（試し用）
+const ZOOM = +new URLSearchParams(location.search).get('zoom') || 1;
+const landscape = () => W > H;
 function project(file, wx, rankY = 0) {
   const sc = 1 / (1 + file * 0.2);
-  const near = { x: W * 0.38, y: H * 0.93 };
+  const near = { x: W * 0.38, y: H * (landscape() ? 0.985 : 0.93) };
   const vp = { x: W * 0.16, y: H * 0.42 };
-  const unit = Math.min(W / (H > W ? 950 : 1500), H / 850) * sc; // 縦長の画面では少し大きめに
+  const base = landscape() ? H * 0.86 / BODY_PX : Math.min(W / 950, H / 850);
+  const unit = base * sc * ZOOM;
   return { x: vp.x + (near.x - vp.x) * sc + wx * unit, y: vp.y + (near.y - vp.y) * sc - rankY * unit, unit };
 }
 // side: 'ally' | 'enemy', rank: 0=前列
@@ -95,7 +127,7 @@ let shake = 0;
 function burst(file, wx, y, color, n, speed = 160) {
   for (let k = 0; k < n; k++) fx.push({ file, wx, y, vx: rand(-speed, speed), vy: rand(-speed * 1.2, speed * 0.3), life: rand(0.25, 0.55), color });
 }
-function say(file, wx, text, color, size = 15) { texts.push({ file, wx, y: 300, text, color, size, life: 1 }); }
+function say(file, wx, text, color, size = 15, y = 300) { texts.push({ file, wx, y, text, color, size, life: 1 }); }
 
 // ===== 音 =====
 let ac = null;
@@ -129,7 +161,7 @@ const contactX = () => shift + GAP / 2;
 const game = createGame((type, i, why) => {
   if (type === 'thrust') {
     SFX.drum();
-    say(0, slotX('ally', 0) + 60, '突け！', '#e0b25a', 30);
+    say(0, slotX('ally', 0) + 60, '突け！', '#e0b25a', 30, 170);
   } else if (type === 'blocked' || type === 'clash') {
     burst(i, contactX(), 260, '#fff2b0', type === 'clash' ? 5 : 8); SFX.clang();
   } else if (type === 'ourDeath') {
@@ -152,6 +184,8 @@ const game = createGame((type, i, why) => {
     showOverlay();
   }
 });
+
+window.phalanx = game; // 開発中の確認用（コンソールから状態を見たり変えたりできる）
 
 // 入力（あとでスマホのセンサーに差し替えられるよう、ここだけに集める）
 function doThrust() { audio(); game.thrust(); }
@@ -311,6 +345,7 @@ function updateFx(dt) {
 const $ = id => document.getElementById(id);
 function showOverlay() {
   const S = game.S, ov = $('overlay');
+  ov.classList.remove('end', 'win', 'lose');
   if (S.phase === 'play') { ov.classList.add('hidden'); return; }
   ov.classList.remove('hidden');
   if (S.phase === 'title') {
@@ -325,8 +360,9 @@ function showOverlay() {
       ${innerHeight > innerWidth ? '<p class="dim">スマホは横向きがおすすめです</p>' : ''}`;
   } else {
     const win = S.phase === 'win';
-    ov.innerHTML = `<h1>${win ? '勝利' : '敗北'}</h1>
-      <p>${win ? `敵陣まで押し切った（${S.endT.toFixed(1)}秒）` : S.why}</p>
+    ov.classList.add('end', win ? 'win' : 'lose');
+    ov.innerHTML = `<div class="bg"></div><h1>${win ? '勝利' : '敗北'}</h1>
+      <p>${win ? `敵を崖から押し落とした（${S.endT.toFixed(1)}秒）` : (S.why === '隊が尽きた' ? '隊が尽き、崖から落とされた' : '押し切られ、崖から落とされた')}</p>
       <p class="dim">倒した敵 ${S.kills}　失った味方 ${S.lost}　突撃 ${S.thrusts}回</p>
       <p style="margin-top:18px">スペース（スマホはタップ）でもう一度</p>`;
   }
@@ -338,6 +374,16 @@ function updateHud() {
   const p = (S.line - CFG.lineWin) / (CFG.lineLose - CFG.lineWin);
   $('gaugeFill').style.width = (100 * (1 - p)).toFixed(1) + '%';
   $('gaugeFill').style.background = p < 0.5 ? '#e0b25a' : p < 0.8 ? '#e07b39' : '#e04848';
+  // 列ごとの敵の合図（赤＝構え・攻撃、金＝戻り、空＝敵がいない）。左が手前
+  const pips = $('pips');
+  if (!pips.childElementCount) {
+    pips.innerHTML = '<span>手前</span>' + Array.from({ length: FILES }, () => '<i></i>').join('') + '<span>奥</span>';
+  }
+  const dots = pips.querySelectorAll('i');
+  S.enemies.forEach((e, i) => {
+    dots[i].className = !e.alive ? 'gap' : e.state === 'windup' || e.state === 'strike' ? 'red' : e.state === 'recover' ? 'gold' : '';
+  });
+  pips.classList.toggle('hidden', S.phase !== 'play');
   const m = $('mode');
   if (S.thrustT >= 0) { m.textContent = '― 突撃中（無防備）―'; m.style.color = '#ffb08a'; }
   else { m.textContent = '盾'; m.style.color = '#f2e8d2'; }
@@ -357,6 +403,8 @@ function loop(now) {
   updateHud();
   requestAnimationFrame(loop);
 }
+// 勝敗の絵は先に読み込んでおく（終わった瞬間に出せるように）
+for (const n of ['victory', 'defeat']) new Image().src = `assets/screens/${n}.jpg`;
 Promise.all(Object.keys(SPRITES).map(loadSprite))
   .then(() => { showOverlay(); requestAnimationFrame(loop); })
   .catch(err => {
