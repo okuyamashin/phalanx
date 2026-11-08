@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phalanx</title>
+<style>
+  :root { --fg:#f2e8d2; --gold:#e0b25a; }
+  html,body { margin:0; height:100%; overflow:hidden; background:#1a140e; color:var(--fg);
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; }
+  canvas { display:block; width:100vw; height:100vh; touch-action:none; }
+  #hud { position:fixed; left:0; right:0; top:0; display:flex; align-items:center; gap:16px;
+    padding:10px 16px; background:linear-gradient(#000000aa,#00000000); pointer-events:none; font-size:15px; text-shadow:0 1px 2px #000; }
+  #gauge { flex:1; max-width:420px; margin:0 auto; height:10px; background:#ffffff30; border-radius:5px; overflow:hidden; }
+  #gaugeFill { height:100%; width:50%; background:var(--gold); }
+  #mode { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); font-size:14px; letter-spacing:.2em;
+    text-shadow:0 1px 3px #000; pointer-events:none; }
+  #overlay { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:#000000b0; text-align:center; padding:16px; }
+  #overlay h1 { font-family: Georgia, serif; color:var(--gold); font-size:56px; margin:0 0 18px; letter-spacing:.08em; }
+  #overlay p { margin:6px 0; font-size:17px; line-height:1.5; }
+  #overlay .dim { color:#c8bba0; font-size:15px; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <span id="ally">味方</span>
+  <div id="gauge"><div id="gaugeFill"></div></div>
+  <span id="foe">敵</span>
+</div>
+<div id="mode">盾</div>
+<div id="overlay"></div>
+
+<script type="module">
+// スプライト（疑似3D）の見た目を、src/game.js のルールにつないだ本編。
+import { CFG, createGame } from './src/game.js';
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0;
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener('resize', resize); resize();
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const ease = t => t * t * (3 - 2 * t);
+
+// ===== 素材 =====
+const SPRITES = { hoplite: {}, persian: {} };
+function loadSprite(name) {
+  const s = SPRITES[name];
+  return Promise.all([
+    fetch(`assets/sprites/${name}.json`).then(r => r.json()).then(m => { s.meta = m; }),
+    new Promise((ok, ng) => { s.img = new Image(); s.img.onload = ok; s.img.onerror = ng; s.img.src = `assets/sprites/${name}.png`; }),
+  ]);
+}
+const BODY_PX = 330;   // 手前の兵の身長（unit=1のときの画面px）
+
+// ===== 配置 =====
+const FILES = CFG.cols;          // 奥に向かう人数（ルール上の「列」）
+const SHOW_RANKS = 3;            // 見せる前後の列数（前列＋後ろ2列）
+const GAP = 330;                 // 味方の前列と敵の前列の間
+const RANK_GAP = 170;
+const LINE_PX = 0.9;             // 押し合いの位置（ルール）→ 画面のずれ
+let shift = 0;                   // 隊列全体の左右のずれ（押されると左へ）
+
+function project(file, wx, rankY = 0) {
+  const sc = 1 / (1 + file * 0.2);
+  const near = { x: W * 0.38, y: H * 0.93 };
+  const vp = { x: W * 0.16, y: H * 0.42 };
+  const unit = Math.min(W / 1500, H / 850) * sc;
+  return { x: vp.x + (near.x - vp.x) * sc + wx * unit, y: vp.y + (near.y - vp.y) * sc - rankY * unit, unit };
+}
+// side: 'ally' | 'enemy', rank: 0=前列
+const slotX = (side, rank) => shift + (side === 'ally' ? -rank * RANK_GAP : GAP + rank * RANK_GAP);
+
+// ===== 演出用の状態 =====
+const enter = { ally: new Array(FILES).fill(0), enemy: new Array(FILES).fill(0) };
+const dying = [];    // 倒れる途中の兵 { side, file, wx, t }
+const corpses = [];  // 地面の兵 { side, file, wx, t }
+const fx = [];       // 火花・血
+const texts = [];    // 浮かぶ文字
+let shake = 0;
+
+function burst(file, wx, y, color, n, speed = 160) {
+  for (let k = 0; k < n; k++) fx.push({ file, wx, y, vx: rand(-speed, speed), vy: rand(-speed * 1.2, speed * 0.3), life: rand(0.25, 0.55), color });
+}
+function say(file, wx, text, color, size = 15) { texts.push({ file, wx, y: 300, text, color, size, life: 1 }); }
+
+// ===== 音 =====
+let ac = null;
+function audio() { if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} } return ac; }
+function tone(freq, dur, type = 'sine', vol = 0.3, slide = 0) {
+  const a = audio(); if (!a) return;
+  const o = a.createOscillator(), g = a.createGain(), t = a.currentTime;
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(20, freq * slide), t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(a.destination); o.start(t); o.stop(t + dur);
+}
+function noise(dur, vol = 0.2, hp = 2000) {
+  const a = audio(); if (!a) return;
+  const n = Math.floor(a.sampleRate * dur), b = a.createBuffer(1, n, a.sampleRate), d = b.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  const s = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
+  f.type = 'highpass'; f.frequency.value = hp; g.gain.value = vol;
+  s.buffer = b; s.connect(f).connect(g).connect(a.destination); s.start();
+}
+let sfxBudget = 0;
+const SFX = {
+  drum() { tone(65, 0.45, 'sine', 0.7, 0.5); noise(0.12, 0.2, 300); },
+  clang() { if (sfxBudget-- > 0) { noise(0.09, 0.12, 3000); tone(1400 + Math.random() * 600, 0.08, 'square', 0.03); } },
+  kill() { if (sfxBudget-- > 0) tone(180, 0.15, 'sawtooth', 0.08, 0.4); },
+  hurt() { if (sfxBudget-- > 0) tone(110, 0.25, 'triangle', 0.18, 0.5); },
+};
+
+// ===== ルールとつなぐ =====
+const contactX = () => shift + GAP / 2;
+const game = createGame((type, i, why) => {
+  if (type === 'thrust') {
+    SFX.drum();
+    say(0, slotX('ally', 0) + 60, '突け！', '#e0b25a', 30);
+  } else if (type === 'blocked' || type === 'clash') {
+    burst(i, contactX(), 260, '#fff2b0', type === 'clash' ? 5 : 8); SFX.clang();
+  } else if (type === 'ourDeath') {
+    dying.push({ side: 'ally', file: i, wx: slotX('ally', 0), t: 0 });
+    burst(i, slotX('ally', 0) + 40, 230, '#8a1010', 12, 120);
+    say(i, slotX('ally', 0), why, '#ff8a7a');
+    SFX.hurt(); if (i < 4) shake = Math.max(shake, 6);
+  } else if (type === 'enemyDeath') {
+    dying.push({ side: 'enemy', file: i, wx: slotX('enemy', 0), t: 0 });
+    burst(i, slotX('enemy', 0) - 40, 230, '#8a1010', 10, 120);
+    SFX.kill();
+  } else if (type === 'ourRefill') {
+    enter.ally[i] = 1;
+  } else if (type === 'enemyRefill') {
+    enter.enemy[i] = 1;
+  } else if (type === 'start') {
+    dying.length = corpses.length = fx.length = texts.length = 0;
+    shift = 0; showOverlay();
+  } else if (type === 'end') {
+    showOverlay();
+  }
+});
+
+// 入力（あとでスマホのセンサーに差し替えられるよう、ここだけに集める）
+function doThrust() { audio(); game.thrust(); }
+addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) doThrust(); }
+  if (e.code === 'KeyR') { game.reset(); dying.length = corpses.length = 0; showOverlay(); }
+});
+cv.addEventListener('pointerdown', doThrust);
+
+// ===== コマの選び方 =====
+function allyFrame(S) {
+  const t = S.thrustT;
+  if (t < 0) return { a: 'guard', dx: 0, breathe: true };
+  if (t < 0.07) return { a: 'windup', dx: -10 * ease(t / 0.07) };
+  if (t < 0.45) return { a: 'thrust', dx: 26 * ease(clamp01((t - 0.07) / 0.07)), blur: t < 0.16 ? 'windup' : null };
+  const b = clamp01((t - 0.45) / (CFG.thrustEnd - 0.45));
+  return { a: 'guard', dx: 26 * (1 - ease(b)), ghost: 'thrust', ghostA: 1 - b };
+}
+function enemyFrame(e) {
+  if (e.state === 'windup') return { a: 'windup', dx: 8, cue: 'red' };
+  if (e.state === 'strike') return { a: 'strike', dx: -22, blur: 'windup', cue: 'red' };
+  if (e.state === 'recover') return { a: 'recover', dx: -10, cue: 'gold' };
+  return { a: 'guard', dx: 0, breathe: true };
+}
+
+// ===== 描画 =====
+function drawFrame(sprite, name, x, y, unit, alpha = 1) {
+  const { img, meta } = SPRITES[sprite];
+  const f = meta.frames[name];
+  const k = unit * BODY_PX / meta.height;
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(img, f.x, f.y, f.w, f.h, x - f.anchor * k, y - f.baseline * k, f.w * k, f.h * k);
+  ctx.globalAlpha = 1;
+}
+function shadow(x, y, unit, w, a = 0.35) {
+  ctx.fillStyle = `rgba(30,18,8,${a})`;
+  ctx.beginPath(); ctx.ellipse(x, y - 2 * unit, w * unit, 18 * unit, -0.05, 0, Math.PI * 2); ctx.fill();
+}
+function cue(x, y, unit, color) {
+  const c = color === 'red' ? '255,70,50' : '255,215,110';
+  const g = ctx.createRadialGradient(x, y, 0, x, y, 95 * unit);
+  g.addColorStop(0, `rgba(${c},0.8)`); g.addColorStop(1, `rgba(${c},0)`);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(x, y, 95 * unit, 26 * unit, 0, 0, Math.PI * 2); ctx.fill();
+}
+function drawUnit(side, file, rank, fr, now) {
+  const ally = side === 'ally';
+  const sprite = ally ? 'hoplite' : 'persian';
+  const p = project(file, slotX(side, rank), rank * 16);
+  const en = rank === 0 ? enter[side][file] : 0;
+  const x = p.x + (fr.dx + (ally ? -1 : 1) * RANK_GAP * ease(en)) * p.unit;
+  const breathe = fr.breathe ? Math.sin(now * 2.2 + file * 1.7 + rank) * 1.5 * p.unit : 0;
+  shadow(x + (ally ? 50 : -50) * p.unit, p.y, p.unit, 100);
+  if (fr.cue) cue(x - 50 * p.unit, p.y, p.unit, fr.cue);
+  if (fr.blur) drawFrame(sprite, fr.blur, x + (ally ? -12 : 12) * p.unit, p.y, p.unit, 0.35);
+  if (fr.ghost) drawFrame(sprite, fr.ghost, x, p.y, p.unit, 0.4 * clamp01(fr.ghostA));
+  drawFrame(sprite, fr.a, x, p.y + breathe, p.unit);
+}
+
+// 背景
+const hills = Array.from({ length: 9 }, (_, i) => ({ x: i / 8, h: rand(0.05, 0.12), w: rand(0.15, 0.3) }));
+const motes = Array.from({ length: 120 }, () => ({ x: Math.random(), y: rand(0.3, 1), r: rand(20, 90), v: rand(0.004, 0.02), a: rand(0.03, 0.08) }));
+function background() {
+  const sky = ctx.createLinearGradient(0, 0, 0, H * 0.45);
+  sky.addColorStop(0, '#6f8fb6'); sky.addColorStop(1, '#e2cfa6');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  const sun = ctx.createRadialGradient(W * 0.85, H * 0.28, 0, W * 0.85, H * 0.28, W * 0.5);
+  sun.addColorStop(0, 'rgba(255,225,160,0.9)'); sun.addColorStop(1, 'rgba(255,225,160,0)');
+  ctx.fillStyle = sun; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#9b8f6b';
+  for (const h of hills) { ctx.beginPath(); ctx.ellipse(h.x * W, H * 0.44, h.w * W, h.h * H, 0, Math.PI, 0); ctx.fill(); }
+  const g = ctx.createLinearGradient(0, H * 0.42, 0, H);
+  g.addColorStop(0, '#c9b083'); g.addColorStop(0.4, '#a98756'); g.addColorStop(1, '#6e5233');
+  ctx.fillStyle = g; ctx.fillRect(0, H * 0.42, W, H);
+  const dust = ctx.createRadialGradient(W * 0.92, H * 0.5, 0, W * 0.92, H * 0.5, W * 0.4);
+  dust.addColorStop(0, 'rgba(225,200,150,0.6)'); dust.addColorStop(1, 'rgba(225,200,150,0)');
+  ctx.fillStyle = dust; ctx.fillRect(0, 0, W, H);
+  // 勝ち・負けの線（地面の目印）
+  for (const [line, color] of [[CFG.lineWin, '170,40,30'], [CFG.lineLose, '40,70,130']]) {
+    const wx = -(line - CFG.lineStart) * LINE_PX + (line === CFG.lineWin ? GAP + RANK_GAP : -RANK_GAP * 1.5);
+    const a = project(0, wx), b = project(FILES + 6, wx);
+    ctx.strokeStyle = `rgba(${color},0.55)`; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+}
+
+function draw(dt, now) {
+  const S = game.S;
+  background();
+  for (let f = FILES - 1; f >= 0; f--) {
+    for (const c of corpses) if (c.file === f) {
+      const p = project(f, c.wx), a = clamp01((7 - c.t) / 1.5);
+      const sprite = c.side === 'ally' ? 'hoplite' : 'persian';
+      shadow(p.x, p.y, p.unit, 160, 0.3 * a);
+      drawFrame(sprite, 'fallen', p.x, p.y + 6 * p.unit, p.unit, a);
+    }
+    for (let r = SHOW_RANKS - 1; r >= 1; r--) {
+      if (r <= S.depth[f]) drawUnit('enemy', f, r, { a: 'guard', dx: 0, breathe: true }, now);
+      if ((r - 1) * FILES + f < S.reserves) drawUnit('ally', f, r, { a: 'guard', dx: 0, breathe: true }, now);
+    }
+    for (const d of dying) if (d.file === f) {
+      const p = project(f, d.wx);
+      const ally = d.side === 'ally', sprite = ally ? 'hoplite' : 'persian';
+      const dx = (ally ? -18 : 18) * ease(clamp01(d.t / 0.16)) * p.unit;
+      shadow(p.x + dx, p.y, p.unit, 100);
+      drawFrame(sprite, d.t < 0.16 ? 'hit' : 'collapse', p.x + dx, p.y, p.unit);
+    }
+    if (S.enemies[f].alive) drawUnit('enemy', f, 0, enemyFrame(S.enemies[f]), now);
+    if (S.ours[f].alive) drawUnit('ally', f, 0, allyFrame(S), now);
+  }
+  for (const q of fx) {
+    const p = project(q.file, q.wx);
+    ctx.globalAlpha = clamp01(q.life * 3); ctx.fillStyle = q.color;
+    ctx.fillRect(p.x + q.ox * p.unit - 2, p.y - (q.y - q.oy) * p.unit - 2, 4, 4);
+  }
+  ctx.globalAlpha = 1; ctx.textAlign = 'center';
+  for (const t of texts) {
+    const p = project(t.file, t.wx);
+    ctx.globalAlpha = clamp01(t.life * 2); ctx.fillStyle = t.color;
+    ctx.font = `bold ${Math.max(12, t.size * Math.min(1.3, p.unit * 1.3))}px sans-serif`;
+    ctx.strokeStyle = '#000a'; ctx.lineWidth = 3;
+    const y = p.y - t.y * p.unit;
+    ctx.strokeText(t.text, p.x, y); ctx.fillText(t.text, p.x, y);
+  }
+  ctx.globalAlpha = 1;
+  for (const m of motes) {
+    m.x += m.v * dt; if (m.x > 1.1) m.x = -0.1;
+    ctx.fillStyle = `rgba(230,205,160,${m.a})`;
+    ctx.beginPath(); ctx.arc(m.x * W, m.y * H, m.r, 0, Math.PI * 2); ctx.fill();
+  }
+  const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(20,10,0,0.55)');
+  ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+}
+
+function updateFx(dt) {
+  const S = game.S;
+  shift += (-(S.line - CFG.lineStart) * LINE_PX - shift) * Math.min(1, dt * 5);
+  for (const side of ['ally', 'enemy']) for (let i = 0; i < FILES; i++) enter[side][i] = Math.max(0, enter[side][i] - dt * 2.5);
+  for (let i = dying.length - 1; i >= 0; i--) {
+    const d = dying[i]; d.t += dt;
+    if (d.t > 0.5) { corpses.push({ side: d.side, file: d.file, wx: d.wx + (d.side === 'ally' ? -18 : 18), t: 0 }); dying.splice(i, 1); }
+  }
+  for (let i = corpses.length - 1; i >= 0; i--) if ((corpses[i].t += dt) > 7) corpses.splice(i, 1);
+  for (let i = fx.length - 1; i >= 0; i--) {
+    const q = fx[i];
+    if (q.ox === undefined) { q.ox = 0; q.oy = 0; }
+    q.ox += q.vx * dt; q.oy += q.vy * dt; q.vy += 500 * dt;
+    if ((q.life -= dt) <= 0) fx.splice(i, 1);
+  }
+  for (let i = texts.length - 1; i >= 0; i--) { texts[i].y += 40 * dt; if ((texts[i].life -= dt) <= 0) texts.splice(i, 1); }
+  shake = Math.max(0, shake - dt * 30);
+}
+
+// ===== HUD・オーバーレイ =====
+const $ = id => document.getElementById(id);
+function showOverlay() {
+  const S = game.S, ov = $('overlay');
+  if (S.phase === 'play') { ov.classList.add('hidden'); return; }
+  ov.classList.remove('hidden');
+  if (S.phase === 'title') {
+    ov.innerHTML = `<h1>PHALANX</h1>
+      <p>盾を並べて守れ。号令で一斉に突け。</p>
+      <p><b>スペースキー（またはクリック）</b>＝ 隊全体で突く　／　それ以外はずっと守り</p>
+      <p class="dim">足元が<span style="color:#ff6a5a">赤く光る敵</span>＝攻撃の構え（スキあり、でも来る）<br>
+      足元が<span style="color:#ffe08a">金色に光る敵</span>＝戻り中（狙いどき）<br>
+      盾を構えた敵に突くと、弾かれて反撃されることがある<br>
+      突いている間は無防備。守ってばかりだと敵が増えて押される。</p>
+      <p style="margin-top:18px">スペースで開始</p>`;
+  } else {
+    const win = S.phase === 'win';
+    ov.innerHTML = `<h1>${win ? '勝利' : '敗北'}</h1>
+      <p>${win ? `敵陣まで押し切った（${S.endT.toFixed(1)}秒）` : S.why}</p>
+      <p class="dim">倒した敵 ${S.kills}　失った味方 ${S.lost}　突撃 ${S.thrusts}回</p>
+      <p style="margin-top:18px">スペースでもう一度</p>`;
+  }
+}
+function updateHud() {
+  const S = game.S;
+  $('ally').textContent = `味方 前列${S.ours.filter(o => o.alive).length}  予備${S.reserves}`;
+  $('foe').textContent = `敵 ${game.enemyTotal()}`;
+  const p = (S.line - CFG.lineWin) / (CFG.lineLose - CFG.lineWin);
+  $('gaugeFill').style.width = (100 * (1 - p)).toFixed(1) + '%';
+  $('gaugeFill').style.background = p < 0.5 ? '#e0b25a' : p < 0.8 ? '#e07b39' : '#e04848';
+  const m = $('mode');
+  if (S.thrustT >= 0) { m.textContent = '― 突撃中（無防備）―'; m.style.color = '#ffb08a'; }
+  else { m.textContent = '盾'; m.style.color = '#f2e8d2'; }
+}
+
+// ===== ループ =====
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  sfxBudget = 3;
+  game.update(dt);
+  updateFx(dt);
+  ctx.save();
+  if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+  draw(dt, now / 1000);
+  ctx.restore();
+  updateHud();
+  requestAnimationFrame(loop);
+}
+Promise.all(Object.keys(SPRITES).map(loadSprite))
+  .then(() => { showOverlay(); requestAnimationFrame(loop); })
+  .catch(err => {
+    ctx.fillStyle = '#f2e8d2'; ctx.font = '16px sans-serif';
+    ctx.fillText('素材を読み込めませんでした。ローカルサーバー経由で開いてください。 ' + err, 20, 40);
+  });
+</script>
+</body>
+</html>
