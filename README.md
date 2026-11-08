@@ -23,7 +23,7 @@
 
 ### スマホをコントローラーにする
 
-1. パソコンで **https://okuyamashin.github.io/phalanx/remote.html** を開く
+1. パソコンで本編（**https://okuyamashin.github.io/phalanx/**）を開く
 2. 右下の QR コードをスマホで読む（スマホに大きな丸いボタンが出る）
 3. あとはスマホのボタンがスペースキーと同じ働きをする
 4. パソコンの左下に「♪ CLICK」が出ていたら、パソコンの画面を一度クリックすると音が出る（ブラウザは、その画面で一度操作するまで音を出させないため）
@@ -57,8 +57,8 @@
 
 | ファイル | 内容 |
 |---|---|
-| `index.html` | **本編**。AIで描いた兵士の絵をコマ送りで動かす疑似3D版。描画は [PixiJS](https://pixijs.com/) 7.4.2（WebGL、MIT ライセンス、CDN から読み込み） |
-| `remote.html` | 本編のコピーで、スマホをコントローラーにつなげる版。QR コードを出す |
+| `index.html` | **本編**。AIで描いた兵士の絵をコマ送りで動かす疑似3D版。描画は [PixiJS](https://pixijs.com/) 7.4.2（WebGL、MIT ライセンス、CDN から読み込み）。右下の QR コードからスマホをコントローラーにできる |
+| `remote.html` | 以前のスマホ操作版の URL。トップページへ移動する |
 | `pad.html` | スマホで開くコントローラー（ボタン1つ。平らにして突き出しても、声でも突ける） |
 | `ble.html` | 本編のコピーで、Mac アプリの中で動く版（Bluetooth の合図を受ける） |
 | `ble-pad.html` | `pad.html` のコピーで、Android アプリの中で動くコントローラー |
@@ -84,8 +84,8 @@ src/game.js          ゲームのルール（描画や入力から独立）
 src/link.js          スマホとパソコンをつなぐ部品（WebRTC、PeerJS）
 src/motion.js        スマホの動きのセンサーで「平らにして突き出す」を見分ける部品
 src/voice.js         スマホのマイクで、短く強い声を見分ける部品
-index.html           本編の描画・演出・入力
-remote.html, pad.html  スマホ操作版のゲーム画面とコントローラー（WebRTC）
+index.html           本編の描画・演出・入力（スマホとは WebRTC でつなぐ）
+pad.html             スマホで開くコントローラー（WebRTC）
 ble.html, ble-pad.html アプリ版のゲーム画面とコントローラー（Bluetooth）
 apps/
   mac/               Mac アプリ（SwiftUI、CoreBluetooth）
