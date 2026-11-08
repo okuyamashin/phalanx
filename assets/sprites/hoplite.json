@@ -1,0 +1,54 @@
+{
+ "image": "hoplite.png",
+ "baseline": 437,
+ "frames": {
+  "guard": {
+   "x": 0,
+   "y": 0,
+   "w": 347,
+   "h": 444,
+   "srcX": 0,
+   "backFoot": 7
+  },
+  "windup": {
+   "x": 347,
+   "y": 0,
+   "w": 285,
+   "h": 444,
+   "srcX": 334,
+   "backFoot": 6
+  },
+  "thrust": {
+   "x": 632,
+   "y": 0,
+   "w": 520,
+   "h": 444,
+   "srcX": 608,
+   "backFoot": 9
+  },
+  "hit": {
+   "x": 1152,
+   "y": 0,
+   "w": 330,
+   "h": 444,
+   "srcX": 1049,
+   "backFoot": 67
+  },
+  "collapse": {
+   "x": 1482,
+   "y": 0,
+   "w": 384,
+   "h": 444,
+   "srcX": 1350,
+   "backFoot": 150
+  },
+  "fallen": {
+   "x": 1866,
+   "y": 0,
+   "w": 446,
+   "h": 444,
+   "srcX": 1725,
+   "backFoot": 111
+  }
+ }
+}

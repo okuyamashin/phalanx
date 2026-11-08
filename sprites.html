@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phalanx Sprites</title>
+<style>
+  html,body { margin:0; height:100%; overflow:hidden; background:#1a140e; color:#f2e8d2;
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; }
+  canvas { display:block; width:100vw; height:100vh; touch-action:none; }
+  #help { position:fixed; left:16px; bottom:14px; font-size:13px; color:#f2e8d2cc; text-shadow:0 1px 3px #000; pointer-events:none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="help">スペース：全員で突く　／　D：誰かが倒れる　／　A：自動（バラバラに動く）切り替え</div>
+<script>
+'use strict';
+// 疑似3D（2.5D）のスプライト動作確認ページ。
+// 1つの角度から描いた絵（assets/sprites/hoplite.png）をコマ送りで動かし、
+// 奥に向かって並べて隊列にする。ゲームのルールとはまだつないでいない。
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+addEventListener('resize', resize); resize();
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const ease = t => t * t * (3 - 2 * t);
+
+// ===== 素材 =====
+const img = new Image();
+let meta = null;
+// 各コマの「立ち位置」の基準（シート内のx）。足が地面に着いている点
+const ANCHOR = { collapse: 70, fallen: 320 };
+
+// ===== 隊列 =====
+const FILES = 11;   // 奥に向かう人数（横一列 = 画面では奥行き方向）
+const RANKS = 3;    // 前後の列数（1列目が前で動く。2・3列目は控え）
+const soldiers = [];
+const corpses = [];
+let auto = true;
+
+function makeSoldier(file, rank) {
+  return { file, rank, state: 'guard', t: 0, next: rand(1, 5), phase: rand(0, 6.28), enter: 0 };
+}
+for (let f = 0; f < FILES; f++) for (let r = 0; r < RANKS; r++) soldiers.push(makeSoldier(f, r));
+
+// 状態：guard（守り）→ thrust（溜め→突き→戻り）/ hit→collapse→fallen（倒れる）
+const T = { windup: 0.16, strike: 0.10, hold: 0.20, back: 0.18, hit: 0.16, collapse: 0.34 };
+
+function thrust(s) { if (s.state === 'guard' && s.enter <= 0) { s.state = 'thrust'; s.t = 0; } }
+function kill(s) {
+  if (s.state === 'dead' || s.rank !== 0) return;
+  s.state = 'dying'; s.t = 0;
+}
+
+addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); soldiers.filter(s => s.rank === 0).forEach(thrust); }
+  if (e.code === 'KeyD') { const alive = soldiers.filter(s => s.rank === 0 && s.state !== 'dying'); if (alive.length) kill(alive[Math.floor(Math.random() * alive.length)]); }
+  if (e.code === 'KeyA') auto = !auto;
+});
+cv.addEventListener('pointerdown', () => soldiers.filter(s => s.rank === 0).forEach(thrust));
+
+function update(dt) {
+  for (const s of soldiers) {
+    s.t += dt; s.enter = Math.max(0, s.enter - dt * 2.2);
+    if (s.state === 'thrust' && s.t > T.windup + T.strike + T.hold + T.back) { s.state = 'guard'; s.t = 0; }
+    if (s.state === 'dying' && s.t > T.hit + T.collapse) {
+      // 倒れた兵は地面に残し、2列目が前に出る
+      corpses.push({ file: s.file, t: 0 });
+      const behind = soldiers.find(o => o.file === s.file && o.rank === 1);
+      s.state = 'guard'; s.t = 0; s.enter = 1; // 前列に新しい兵が入ってくる
+      if (behind) behind.enter = 1;            // 2列目も補充されたように見せる
+    }
+    if (auto && s.rank === 0 && s.state === 'guard') {
+      s.next -= dt;
+      if (s.next <= 0) { s.next = rand(1.5, 5); if (Math.random() < 0.85) thrust(s); else kill(s); }
+    }
+  }
+  for (let i = corpses.length - 1; i >= 0; i--) if ((corpses[i].t += dt) > 6) corpses.splice(i, 1);
+}
+
+// ===== 投影：奥へ向かう消失点 =====
+function project(file, rank) {
+  // file: 0 = 手前。奥に行くほど小さく、消失点（左上）へ寄る
+  const sc = 1 / (1 + file * 0.2);
+  const near = { x: W * 0.46, y: H * 0.93 };
+  const vp = { x: W * 0.12, y: H * 0.42 };
+  const base = { x: vp.x + (near.x - vp.x) * sc, y: vp.y + (near.y - vp.y) * sc };
+  const unit = Math.min(W, H * 1.6) / 1300 * sc;   // 画面上の大きさ
+  // 後ろの列は左（＝自軍の後方）に、少し上へずらす
+  return { x: base.x - rank * 175 * unit, y: base.y - rank * 18 * unit, unit, sc };
+}
+
+// ===== 描画 =====
+function frameFor(s) {
+  if (s.state === 'thrust') {
+    const t = s.t;
+    if (t < T.windup) return { a: 'windup', dx: -10 * ease(t / T.windup) };
+    if (t < T.windup + T.strike + T.hold) return { a: 'thrust', dx: 26 * ease(clamp01((t - T.windup) / T.strike)), blur: t < T.windup + T.strike + 0.05 ? 'windup' : null };
+    return { a: 'guard', dx: 26 * (1 - ease((t - T.windup - T.strike - T.hold) / T.back)), ghost: 'thrust', ghostA: 1 - (t - T.windup - T.strike - T.hold) / T.back };
+  }
+  if (s.state === 'dying') {
+    if (s.t < T.hit) return { a: 'hit', dx: -18 * ease(s.t / T.hit) };
+    return { a: 'collapse', dx: -18 };
+  }
+  return { a: 'guard', dx: 0 };
+}
+
+function drawFrame(name, x, y, unit, alpha = 1, flash = 0) {
+  const f = meta.frames[name];
+  const anchor = ANCHOR[name] ?? f.backFoot;
+  const k = unit * 0.78;
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(img, f.x, f.y, f.w, f.h, x - anchor * k, y - meta.baseline * k, f.w * k, f.h * k);
+  ctx.globalAlpha = 1;
+}
+
+function shadow(x, y, unit, w = 170, a = 0.35) {
+  ctx.save();
+  ctx.fillStyle = `rgba(30,18,8,${a})`;
+  ctx.beginPath(); ctx.ellipse(x + 40 * unit, y - 2 * unit, w * unit * 0.6, 18 * unit, -0.05, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+// 背景
+const hills = Array.from({ length: 9 }, (_, i) => ({ x: i / 8, h: rand(0.05, 0.12), w: rand(0.15, 0.3) }));
+const motes = Array.from({ length: 140 }, () => ({ x: Math.random(), y: rand(0.3, 1), r: rand(20, 90), v: rand(0.004, 0.02), a: rand(0.03, 0.09) }));
+function background(t) {
+  const sky = ctx.createLinearGradient(0, 0, 0, H * 0.45);
+  sky.addColorStop(0, '#6f8fb6'); sky.addColorStop(1, '#e2cfa6');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  // 夕陽
+  const sun = ctx.createRadialGradient(W * 0.85, H * 0.28, 0, W * 0.85, H * 0.28, W * 0.5);
+  sun.addColorStop(0, 'rgba(255,225,160,0.9)'); sun.addColorStop(1, 'rgba(255,225,160,0)');
+  ctx.fillStyle = sun; ctx.fillRect(0, 0, W, H);
+  // 丘
+  ctx.fillStyle = '#9b8f6b';
+  for (const h of hills) { ctx.beginPath(); ctx.ellipse(h.x * W, H * 0.44, h.w * W, h.h * H, 0, Math.PI, 0); ctx.fill(); }
+  // 地面
+  const g = ctx.createLinearGradient(0, H * 0.42, 0, H);
+  g.addColorStop(0, '#c9b083'); g.addColorStop(0.4, '#a98756'); g.addColorStop(1, '#6e5233');
+  ctx.fillStyle = g; ctx.fillRect(0, H * 0.42, W, H);
+  // 右奥（敵の来る方向）の砂煙
+  const dust = ctx.createRadialGradient(W * 0.88, H * 0.5, 0, W * 0.88, H * 0.5, W * 0.45);
+  dust.addColorStop(0, 'rgba(225,200,150,0.75)'); dust.addColorStop(1, 'rgba(225,200,150,0)');
+  ctx.fillStyle = dust; ctx.fillRect(0, 0, W, H);
+}
+function haze(dt) {
+  for (const m of motes) {
+    m.x += m.v * dt; if (m.x > 1.1) m.x = -0.1;
+    ctx.fillStyle = `rgba(230,205,160,${m.a})`;
+    ctx.beginPath(); ctx.arc(m.x * W, m.y * H, m.r, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function draw(dt, now) {
+  background(now);
+  // 奥から手前へ。同じ奥行きでは後ろの列から
+  const order = [];
+  for (let f = FILES - 1; f >= 0; f--) {
+    for (const c of corpses) if (c.file === f) order.push({ corpse: c, f });
+    for (let r = RANKS - 1; r >= 0; r--) order.push({ s: soldiers.find(s => s.file === f && s.rank === r), f });
+  }
+  for (const o of order) {
+    if (o.corpse) {
+      const p = project(o.f, 0);
+      const a = clamp01((6 - o.corpse.t) / 1.5);
+      shadow(p.x - 60 * p.unit, p.y, p.unit, 260, 0.3 * a);
+      drawFrame('fallen', p.x - 18 * p.unit, p.y + 6 * p.unit, p.unit, a);
+      continue;
+    }
+    const s = o.s, p = project(o.f, s.rank);
+    // 補充：一つ後ろの位置から歩いて入ってくる
+    const enterOff = -175 * p.unit * ease(s.enter);
+    const breathe = Math.sin(now * 2.2 + s.phase) * 1.5 * p.unit;
+    const fr = frameFor(s);
+    const x = p.x + fr.dx * p.unit + enterOff, y = p.y;
+    shadow(x, y, p.unit);
+    if (fr.blur) drawFrame(fr.blur, x - 12 * p.unit, y, p.unit, 0.35);
+    if (fr.ghost) drawFrame(fr.ghost, x, y, p.unit, 0.4 * clamp01(fr.ghostA));
+    drawFrame(fr.a, x, y + breathe * (fr.a === 'guard' ? 1 : 0), p.unit);
+  }
+  haze(dt);
+  // 周辺減光
+  const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(20,10,0,0.55)');
+  ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  update(dt); draw(dt, now / 1000);
+  requestAnimationFrame(loop);
+}
+
+Promise.all([
+  fetch('assets/sprites/hoplite.json').then(r => r.json()).then(m => { meta = m; }),
+  new Promise((ok, ng) => { img.onload = ok; img.onerror = ng; img.src = 'assets/sprites/hoplite.png'; }),
+]).then(() => requestAnimationFrame(loop)).catch(err => {
+  ctx.fillStyle = '#f2e8d2'; ctx.font = '16px sans-serif';
+  ctx.fillText('素材を読み込めませんでした。ローカルサーバー経由で開いてください。' + err, 20, 40);
+});
+</script>
+</body>
+</html>
