@@ -21,6 +21,15 @@
 - 守ってばかりいると敵の増援が増え、じわじわ押し下げられる。
 - 敵を崖まで押し切れば **ΝΙΚΗ**（勝利）。崖まで押されるか、隊が尽きれば **ΗΤΤΑ**（敗北）。
 
+### スマホをコントローラーにする
+
+1. パソコンで **https://okuyamashin.github.io/phalanx/remote.html** を開く
+2. 右下の QR コードをスマホで読む（スマホに大きな丸いボタンが出る）
+3. パソコンの画面を一度クリックする（ブラウザは、その画面で一度操作するまで音を出させないため）
+4. あとはスマホのボタンがスペースキーと同じ働きをする
+
+パソコンとスマホは同じ Wi-Fi につないでください。携帯回線では、つながらないことがあります。スマホの上の点が緑ならつながっています（横の数字は往復の時間）。✕ はつながっていない印で、裏でつなぎ直しを続けます。
+
 画面の数字はギリシャ数字（イオニア式：Αʹ=1、Ιʹ=10、Ρʹ=100）です。左上が味方の残り、右上が敵の残りです。
 
 ## ルールの細かいところ
@@ -35,6 +44,8 @@
 | ファイル | 内容 |
 |---|---|
 | `index.html` | **本編**。AIで描いた兵士の絵をコマ送りで動かす疑似3D版。描画は [PixiJS](https://pixijs.com/) 7.4.2（WebGL、MIT ライセンス、CDN から読み込み） |
+| `remote.html` | 本編のコピーで、スマホをコントローラーにつなげる版。QR コードを出す |
+| `pad.html` | スマホで開くコントローラー（ボタン1つ） |
 | `proto2d.html` | 最初に作った2Dの試作（上から見た図） |
 | `game.html` | 以前の本編のURL。トップページへ移動する |
 | `3d.html` | Three.js で作った3Dの試作 |
@@ -54,7 +65,9 @@ python3 -m http.server 8000
 
 ```
 src/game.js          ゲームのルール（描画や入力から独立）
+src/link.js          スマホとパソコンをつなぐ部品（WebRTC、PeerJS）
 index.html           本編の描画・演出・入力
+remote.html, pad.html  スマホ操作版のゲーム画面とコントローラー
 assets/
   sprites/           兵士のコマ（hoplite = 味方、persian = 敵）と、元の緑背景のシート（raw/）
   screens/           タイトル・勝敗の絵（raw/ に元のPNG）
@@ -82,13 +95,15 @@ python3 tools/make_sprites.py persian    # 敵だけ
 | 地面（`assets/textures/`） | [Poly Haven: Rocky Terrain 02](https://polyhaven.com/a/rocky_terrain_02)（Amal Kumar）を色調整 | CC0 |
 | 効果音（`assets/sounds/`） | [Kenney](https://kenney.nl) の Impact Sounds・RPG Audio | CC0 |
 | タイトル・勝敗の曲（`assets/music/`） | 作者が Suno（有料プラン）で作曲 | 作者に帰属 |
+| 通信（`src/link.js`） | [PeerJS](https://peerjs.com/) 1.5.5（CDN から読み込み）。最初のつなぎ込みに無料の PeerJS Cloud を使う | MIT |
+| QR コード | [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 2.0.4（Kazuhiko Arase、CDN から読み込み） | MIT |
 | 太鼓などの一部の音 | ブラウザ上でプログラムで合成 | MIT（コードの一部） |
 
 素材ごとの詳しい出典は、各フォルダの README に書いています。
 
 ## 今後の予定
 
-- スマホの加速度センサーをコントローラーにする（立てる＝守り、倒して突く＝突撃、その中間＝無防備）
+- スマホの加速度センサーをコントローラーにする（立てる＝守り、倒して突く＝突撃、その中間＝無防備）。つなぐ仕組み（`remote.html` と `pad.html`）はできたので、ボタンの代わりにセンサーで合図を送る
 
 ## ライセンス
 
