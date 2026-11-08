@@ -34,6 +34,8 @@
   html.motion-ask #sensor { animation: ask 1.4s ease-in-out infinite; }
   @keyframes ask { 50% { opacity:.1; } }
   html.flat #sensor { opacity:1; }
+  /* 許可されなかった：◎ に斜線。iPhone では設定 → Safari → 詳細 → Web サイトデータの削除などで、もう一度聞かれる */
+  html.motion-denied #sensor { display:inline; opacity:.35; text-decoration:line-through; }
   html.flat body.linked #btn { box-shadow:0 0 28px 2px #e0b25a55; border-color:#ffd88a; }
   #debug { position:fixed; bottom:10px; left:0; right:0; text-align:center; font:11px ui-monospace, Menlo, monospace; opacity:.6; }
   #btn.hit { transform:scale(.94); box-shadow:0 0 40px 6px #e0b25a66; transition:none; }
@@ -47,7 +49,7 @@
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script>
 <script type="module">
 import { padLink } from './src/link.js?v=5'; // ?v= を上げると、ブラウザに残った古いファイルを使わない
-import { motionThrust } from './src/motion.js?v=1';
+import { motionThrust } from './src/motion.js?v=3';
 
 const hostId = location.hash.slice(1).replace(/[^a-z0-9]/g, '');
 const txt = document.getElementById('txt'), btn = document.getElementById('btn');
@@ -91,9 +93,11 @@ function fire() {
 // 押した瞬間に送る（離したときではない）
 btn.addEventListener('pointerdown', e => {
   e.preventDefault();
-  motion.start(); // iPhone では、ここで初めてセンサーの許可を頼める
   fire();
 });
+// センサーの許可は、指を離したときにしか頼めない（iPhone）
+btn.addEventListener('click', () => motion.start());
+addEventListener('touchend', () => motion.start());
 
 // 動きのセンサー。URL に ?jab=10 などを付けると、突き出しの強さのしきい値を変えられる
 const q = new URLSearchParams(location.search);
@@ -106,6 +110,7 @@ const motion = motionThrust({
     const c = document.documentElement.classList;
     c.toggle('motion-on', st === 'on');
     c.toggle('motion-ask', st === 'needs-permission');
+    c.toggle('motion-denied', st === 'denied');
     c.toggle('flat', st === 'on' && flat);
   },
 });

@@ -16,7 +16,7 @@ const DEFAULTS = {
 export function motionThrust({ onThrust = () => {}, onState = () => {}, ...opts } = {}) {
   const cfg = { ...DEFAULTS, ...opts };
   const cosFlat = Math.cos(cfg.flatDeg * Math.PI / 180);
-  // state: 'off'（未対応・未許可）| 'needs-permission' | 'on'
+  // state: 'off'（センサーがない）| 'needs-permission' | 'denied'（許可されなかった）| 'on'
   let state = 'off', flat = false, last = 0;
   let gx = 0, gy = 0, gz = 0, haveG = false; // 重力の向き（ゆっくり追う）
   const api = { get state() { return state; }, get flat() { return flat; }, peak: 0, start, cfg };
@@ -50,19 +50,26 @@ export function motionThrust({ onThrust = () => {}, onState = () => {}, ...opts 
     addEventListener('devicemotion', onMotion);
   }
 
-  // 許可が要らない端末（Android など）は、すぐ聞き始める。値が来れば 'on' になる
+  // 最初から聞き始める。Android の Chrome などは許可なしでも値が来るので、その時点で 'on' になる。
+  // iPhone は許可するまで値が来ないので、そのあいだは 'needs-permission'（ボタンを押すと頼む）
   const needsPermission = typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function';
   if (typeof DeviceMotionEvent === 'undefined') setState('off');
-  else if (needsPermission) setState('needs-permission');
-  else listen();
+  else { if (needsPermission) setState('needs-permission'); listen(); }
+  let granted = false;
 
-  // ボタンを押したときに呼ぶ。iPhone ではここで許可を頼む
+  // 指を離したとき（click / touchend）に呼ぶ。iPhone ではここで許可を頼む。
+  // iPhone の Safari は、指が触れた瞬間（pointerdown / touchstart）の中で頼んでも黙って無視する
+  let asking = false;
   async function start() {
-    if (state !== 'needs-permission') return;
+    if (state !== 'needs-permission' || asking || granted) return;
+    asking = true;
     try {
       const r = await DeviceMotionEvent.requestPermission();
-      if (r === 'granted') listen(); else setState('off');
-    } catch { setState('off'); }
+      if (r === 'granted') granted = true; else setState('denied');
+    } catch (err) {
+      // 指を離したとき以外に呼ぶと、ここに来る。次の操作でもう一度頼めるよう、状態は変えない
+      console.warn('[motion]', err);
+    } finally { asking = false; }
   }
   return api;
 }
