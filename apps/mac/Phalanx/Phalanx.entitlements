@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- アプリを箱の中で動かす（Mac の標準の守り） -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- 近くのコントローラーを Bluetooth で探してつなぐ -->
+	<key>com.apple.security.device.bluetooth</key>
+	<true/>
+	<!-- ゲームのページ（GitHub Pages）を読み込む -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>
