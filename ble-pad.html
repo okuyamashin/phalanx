@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#1a140e">
+<title>Phalanx · BLE Pad</title>
+<style>
+  html,body { margin:0; height:100%; overflow:hidden; background:#1a140e; color:#f2e8d2;
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+    touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
+    -webkit-tap-highlight-color:transparent; }
+  body { display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  #status { position:fixed; top:12px; left:0; right:0; text-align:center; font-size:13px; color:#f2e8d2aa;
+    font-family: ui-monospace, Menlo, monospace; }
+  #detail { margin-top:4px; font-size:10px; opacity:.6; }
+  body.linked #detail { display:none; }
+  #status .dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:#777; margin-right:6px; vertical-align:1px; }
+  body.linked #status .dot { background:#6fd06f; }
+  body.error #status .dot, body.closed #status .dot { background:#e04848; }
+  #btn { width:min(78vw, 78vh); height:min(78vw, 78vh); border-radius:50%; border:3px solid #e0b25a;
+    background:radial-gradient(circle at 50% 40%, #5a3d1e, #2a1c0e 70%); color:#e0b25a;
+    font-family: Georgia, "Times New Roman", serif; font-size:min(16vw, 16vh); letter-spacing:.06em;
+    display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 0 #e0b25a00;
+    transition: transform .06s, box-shadow .2s, opacity .2s; }
+  body:not(.linked) #btn { opacity:.35; }
+  #btn { flex-direction:column; }
+  #btn small { font-size:.32em; letter-spacing:.2em; opacity:.8; margin-bottom:.15em; }
+  #btn svg { width:68%; height:68%; }
+  body.win #btn small { color:#f0cf8a; } body.lose #btn small { color:#e07b6a; }
+  /* 動きのセンサー：◎ が出ていれば使える。平らにすると金色に光り、突き出せる */
+  #sensor { display:none; margin-left:10px; color:#e0b25a; opacity:.45; }
+  html.motion-on #sensor, html.motion-ask #sensor { display:inline; }
+  html.motion-ask #sensor { animation: ask 1.4s ease-in-out infinite; }
+  @keyframes ask { 50% { opacity:.1; } }
+  html.flat #sensor { opacity:1; }
+  /* 許可されなかった：◎ に斜線。iPhone では設定 → Safari → 詳細 → Web サイトデータの削除などで、もう一度聞かれる */
+  html.motion-denied #sensor { display:inline; opacity:.35; text-decoration:line-through; }
+  html.flat body.linked #btn { box-shadow:0 0 28px 2px #e0b25a55; border-color:#ffd88a; }
+  /* マイク：声で突ける。声の大きさで明るくなる */
+  #mic { display:none; margin-left:8px; vertical-align:-2px; color:#e0b25a; opacity:.35; }
+  html.voice-on #mic { display:inline-block; }
+  #mic svg { width:12px; height:14px; display:block; }
+  #debug { position:fixed; bottom:10px; left:0; right:0; text-align:center; font:11px ui-monospace, Menlo, monospace; opacity:.6; }
+  #btn.hit { transform:scale(.94); box-shadow:0 0 40px 6px #e0b25a66; transition:none; }
+</style>
+</head>
+<body>
+<div id="status"><span class="dot"></span><span id="txt">…</span><span id="sensor">◎</span><span id="mic"><svg viewBox="0 0 12 14"><rect x="3.5" y="0.5" width="5" height="8" rx="2.5" fill="currentColor"/><path d="M1.5 6.5a4.5 4.5 0 0 0 9 0M6 11v2.5" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg></span><div id="detail"></div></div>
+<div id="debug"></div>
+<div id="btn"></div>
+
+<script type="module">
+import { motionThrust } from './src/motion.js?v=4';
+import { voiceThrust } from './src/voice.js?v=1';
+
+const txt = document.getElementById('txt'), btn = document.getElementById('btn');
+
+// ボタンの中身は場面で変える
+const SPEAR = '<svg viewBox="0 0 100 100"><path d="M10 50H74" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><path d="M70 50Q78 41 95 50Q78 59 70 50Z" fill="currentColor"/><path d="M5 50L9 46H20V54H9Z" fill="currentColor"/></svg>';
+const FACE = {
+  gate: '⟡',
+  title: 'ΑΡΧΗ',
+  play: SPEAR,
+  win: '<small>ΝΙΚΗ</small>↻',
+  lose: '<small>ΗΤΤΑ</small>↻',
+};
+let phase = 'gate', conn = 'connecting';
+function render() {
+  document.body.className = conn + (conn === 'linked' ? ' ' + phase : '');
+  btn.innerHTML = conn === 'linked' ? (FACE[phase] || '⟡') : '⟡';
+}
+// ===== Pixel アプリ（apps/android）とのつなぎ =====
+// このページは Pixel アプリの WebView の中で動く。合図は Bluetooth で送るので、アプリに渡す（Android.thrust()）。
+// アプリからは、つながりの状態と画面の場面が届く（window.phalanxPad.setStatus / setPhase）。
+// 状態：'waiting'（画面を待っている）| 'linked'（画面とつながった）| 'error'（Bluetooth が使えないなど）
+const app = window.Android;
+const STATUS_TEXT = { waiting: '…', linked: 'Bluetooth', error: '✕' };
+function setStatus(s, why = '') {
+  conn = s === 'linked' ? 'linked' : s === 'error' ? 'error' : 'connecting';
+  render();
+  txt.textContent = STATUS_TEXT[s] || '…';
+  document.getElementById('detail').textContent = why;
+}
+window.phalanxPad = {
+  setStatus,
+  setPhase: p => { if (FACE[p]) { phase = p; render(); } },
+};
+const link = { thrust: () => !!(app && app.thrust()) };
+if (!app) setStatus('error', 'Pixel アプリの中で開いてください');
+else setStatus(app.status(), app.statusText());
+
+// 合図を送る。ボタンでも、平らにして突き出しても、声でも同じ。
+// ボタンを押した音や振動をセンサーやマイクが拾って二重に出ないよう、ボタン以外は直前の合図から少しあける
+let lastFire = 0;
+function fire(fromButton = false) {
+  const now = performance.now();
+  if (!fromButton && now - lastFire < 400) return;
+  lastFire = now;
+  if (!link.thrust()) return;
+  btn.classList.add('hit');
+  if (navigator.vibrate) navigator.vibrate(15);
+  setTimeout(() => btn.classList.remove('hit'), 90);
+}
+// 押した瞬間に送る（離したときではない）
+btn.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  fire(true);
+});
+// センサーとマイクの許可は、指を離したときにしか頼めない
+const startSensors = () => { motion.start(); voice.start(); };
+btn.addEventListener('click', startSensors);
+addEventListener('touchend', startSensors);
+
+// 動きのセンサー。URL に ?jab=10 などを付けると、突き出しの強さのしきい値を変えられる
+const q = new URLSearchParams(location.search);
+const opts = {};
+if (q.has('jab')) opts.jab = Number(q.get('jab'));
+// 声。URL に ?voice=0.05 などを付けると、反応する声の大きさを変えられる
+const voiceOpts = q.has('voice') ? { level: Number(q.get('voice')) } : {};
+const voice = voiceThrust({
+  ...voiceOpts,
+  onThrust: () => fire(),
+  onState: st => document.documentElement.classList.toggle('voice-on', st === 'on'),
+});
+const micEl = document.getElementById('mic');
+setInterval(() => {
+  if (voice.state === 'on') micEl.style.opacity = (0.35 + 0.65 * Math.min(1, voice.level / voice.cfg.level)).toFixed(2);
+}, 50);
+const motion = motionThrust({
+  ...opts,
+  onThrust: fire,
+  onState: (st, flat) => {
+    const c = document.documentElement.classList;
+    c.toggle('motion-on', st === 'on');
+    c.toggle('motion-ask', st === 'needs-permission');
+    c.toggle('motion-denied', st === 'denied');
+    c.toggle('flat', st === 'on' && flat);
+  },
+});
+// 調整用：URL に ?debug を付けると、平らかどうかと、最近いちばん強かった動きを出す
+if (q.has('debug')) setInterval(() => {
+  document.getElementById('debug').textContent =
+    `${motion.state} · ${motion.flat ? 'flat' : 'tilt'} · peak ${motion.peak.toFixed(1)} / ${motion.cfg.jab}` +
+    ` ｜ voice ${voice.state} · peak ${voice.peak.toFixed(3)} / ${voice.cfg.level} · floor ${voice.floor.toFixed(3)}`;
+}, 100);
+addEventListener('contextmenu', e => e.preventDefault());
+
+// 画面が消えると接続が切れるので、つながっている間は画面をつけたままにする（対応している端末だけ）。
+// 画面に戻ってくると解除されているので、そのたびに頼み直す
+let wake = null;
+async function keepAwake() {
+  if (!('wakeLock' in navigator) || wake || document.visibilityState !== 'visible') return;
+  try { wake = await navigator.wakeLock.request('screen'); wake.addEventListener('release', () => { wake = null; }); }
+  catch { /* 電池残量が少ないときなどは断られる。そのままで問題ない */ }
+}
+keepAwake();
+document.addEventListener('visibilitychange', keepAwake);
+addEventListener('pointerdown', keepAwake);
+</script>
+</body>
+</html>

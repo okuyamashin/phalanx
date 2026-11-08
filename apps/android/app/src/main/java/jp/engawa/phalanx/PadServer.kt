@@ -41,7 +41,7 @@ object Phalanx {
 @SuppressLint("MissingPermission")
 class PadServer(
     private val context: Context,
-    private val onStatus: (String) -> Unit,   // 画面に出す短い状態
+    private val onStatus: (String, String) -> Unit, // 状態（waiting / linked / error）と、画面に出す短い説明
     private val onPhase: (String) -> Unit,    // 画面から場面が届いた
 ) {
     private val manager = context.getSystemService(BluetoothManager::class.java)
@@ -56,7 +56,7 @@ class PadServer(
 
     fun start() {
         val adapter = manager?.adapter
-        if (adapter == null || !adapter.isEnabled) { onStatus("Bluetooth がオフです"); return }
+        if (adapter == null || !adapter.isEnabled) { onStatus("error", "Bluetooth がオフです"); return }
         if (server == null) openServer()
         advertise()
     }
@@ -111,7 +111,7 @@ class PadServer(
 
     private fun advertise() {
         val advertiser = adapter()?.bluetoothLeAdvertiser
-        if (advertiser == null) { onStatus("この端末は電波を出せません"); return }
+        if (advertiser == null) { onStatus("error", "この端末は電波を出せません"); return }
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY) // 早く見つけてもらう
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
@@ -135,17 +135,17 @@ class PadServer(
         }
         override fun onStartFailure(errorCode: Int) {
             advertising = false
-            onStatus("電波を出せませんでした（$errorCode）")
+            onStatus("error", "電波を出せませんでした（$errorCode）")
         }
     }
 
     private fun report() {
-        onStatus(when {
-            subscribers.isNotEmpty() -> "つながっています"
-            connected.isNotEmpty() -> "つないでいます…"
-            advertising -> "画面を待っています"
-            else -> "準備中…"
-        })
+        when {
+            subscribers.isNotEmpty() -> onStatus("linked", "つながっています")
+            connected.isNotEmpty() -> onStatus("waiting", "つないでいます…")
+            advertising -> onStatus("waiting", "画面を待っています")
+            else -> onStatus("waiting", "準備中…")
+        }
     }
 
     private val callback = object : BluetoothGattServerCallback() {

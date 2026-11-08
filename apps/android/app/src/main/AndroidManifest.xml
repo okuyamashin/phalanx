@@ -5,12 +5,17 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
+    <!-- コントローラーの画面（ble-pad.html）を読み込む -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 声で突く -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 押したときに少し震える -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
         android:label="Phalanx Pad"
         android:allowBackup="false"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity
             android:name=".MainActivity"
