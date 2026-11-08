@@ -1,3 +1,9 @@
 .DS_Store
 .claude/
 node_modules/
+
+# 音の候補（Kenney のパック全体）。手元で聞き比べる用なので公開しない
+assets/sounds/_candidates/
+# ダウンロードした素材パック
+kenney_*.zip
+tools/sound-board.html
