@@ -10,6 +10,11 @@
     font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
     touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
   canvas { display:block; touch-action:none; }
+  /* 右奥の砂煙と周辺の暗さ。キャンバスに毎回描くと重いので、上に重ねた板で表す */
+  #air { position:fixed; inset:0; pointer-events:none;
+    background:
+      radial-gradient(ellipse 60% 55% at 50% 50%, transparent 55%, rgba(20,10,0,.55) 100%),
+      radial-gradient(circle at 92% 50%, rgba(225,200,150,.35), rgba(225,200,150,0) 40%); }
   @media (max-width: 600px) { #overlay h1 { font-size:40px; } #overlay p { font-size:15px; } #overlay .dim { font-size:13px; } }
   #hud { position:fixed; left:0; right:0; top:0; display:flex; align-items:center; gap:16px;
     padding:10px 16px; background:linear-gradient(#000000aa,#00000000); pointer-events:none; font-size:15px; text-shadow:0 1px 2px #000; }
@@ -82,6 +87,7 @@
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="air"></div>
 <div id="hud">
   <span class="side"><i class="ico aspis"></i><b id="ally"></b></span>
   <div id="gauge"><div id="gaugeFill"></div></div>
@@ -133,13 +139,21 @@ let shift = 0;                   // 隊列全体の左右のずれ（押され�
 // URLに ?zoom=0.6 のように付けると、さらに倍率を掛けられる（試し用）
 const ZOOM = +new URLSearchParams(location.search).get('zoom') || 1;
 const landscape = () => W > H;
+// カメラは隊列を半分ほど追いかける。押されると地面や倒れた兵が流れて見える
+const CAM_FOLLOW = 0.6;
+let camX = 0;
+function view() {
+  return {
+    near: { x: W * 0.38, y: H * (landscape() ? 0.985 : 0.93) },
+    vp: { x: W * 0.16, y: H * 0.42 },
+    base: (landscape() ? H * 0.86 / BODY_PX : Math.min(W / 950, H / 850)) * ZOOM,
+  };
+}
 function project(file, wx, rankY = 0) {
+  const { near, vp, base } = view();
   const sc = 1 / (1 + file * 0.2);
-  const near = { x: W * 0.38, y: H * (landscape() ? 0.985 : 0.93) };
-  const vp = { x: W * 0.16, y: H * 0.42 };
-  const base = landscape() ? H * 0.86 / BODY_PX : Math.min(W / 950, H / 850);
-  const unit = base * sc * ZOOM;
-  return { x: vp.x + (near.x - vp.x) * sc + wx * unit, y: vp.y + (near.y - vp.y) * sc - rankY * unit, unit };
+  const unit = base * sc;
+  return { x: vp.x + (near.x - vp.x) * sc + (wx - camX) * unit, y: vp.y + (near.y - vp.y) * sc - rankY * unit, unit };
 }
 // side: 'ally' | 'enemy', rank: 0=前列
 const slotX = (side, rank) => shift + (side === 'ally' ? -rank * RANK_GAP : GAP + rank * RANK_GAP);
@@ -274,22 +288,80 @@ function drawUnit(side, file, rank, fr, now) {
 
 // 背景
 const hills = Array.from({ length: 9 }, (_, i) => ({ x: i / 8, h: rand(0.05, 0.12), w: rand(0.15, 0.3) }));
-const motes = Array.from({ length: 120 }, () => ({ x: Math.random(), y: rand(0.3, 1), r: rand(20, 90), v: rand(0.004, 0.02), a: rand(0.03, 0.08) }));
+const motes = Array.from({ length: 36 }, () => ({ x: Math.random(), y: rand(0.3, 1), r: rand(30, 110), v: rand(0.004, 0.02), a: rand(0.05, 0.12) }));
+// 重い塗り（全画面のグラデーション）は、画面サイズが変わったときだけ別のキャンバスに描いておく
+function layer(draw) {
+  const c = document.createElement('canvas'), dpr = Math.min(devicePixelRatio || 1, 2);
+  c.width = Math.max(1, W * dpr); c.height = Math.max(1, H * dpr);
+  const g = c.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); draw(g);
+  return c;
+}
+let layers = { key: '' };
+function getLayers() {
+  const key = W + 'x' + H;
+  if (layers.key === key) return layers;
+  const { vp } = view(), top = Math.ceil(vp.y);
+  layers = {
+    key,
+    sky: layer(g => {
+      const sky = g.createLinearGradient(0, 0, 0, H * 0.45);
+      sky.addColorStop(0, '#6f8fb6'); sky.addColorStop(1, '#e2cfa6');
+      g.fillStyle = sky; g.fillRect(0, 0, W, top + 2);
+      const sun = g.createRadialGradient(W * 0.85, H * 0.28, 0, W * 0.85, H * 0.28, W * 0.5);
+      sun.addColorStop(0, 'rgba(255,225,160,0.9)'); sun.addColorStop(1, 'rgba(255,225,160,0)');
+      g.fillStyle = sun; g.fillRect(0, 0, W, top + 2);
+      g.fillStyle = '#9b8f6b';
+      for (const h of hills) { g.beginPath(); g.ellipse(h.x * W, H * 0.44, h.w * W, h.h * H, 0, Math.PI, 0); g.fill(); }
+    }),
+    // 地面の上に重ねる光：奥は砂ぼこりでかすみ、手前は影で少し暗い
+    groundLight: layer(g => {
+      const hz = g.createLinearGradient(0, top, 0, H);
+      hz.addColorStop(0, 'rgba(222,200,160,1)'); hz.addColorStop(0.4, 'rgba(222,200,160,0)');
+      hz.addColorStop(0.6, 'rgba(60,35,15,0)'); hz.addColorStop(1, 'rgba(60,35,15,0.35)');
+      g.fillStyle = hz; g.fillRect(0, top, W, H - top);
+    }),
+  };
+  return layers;
+}
+const moteImg = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d'), r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, 'rgba(230,205,160,1)'); r.addColorStop(1, 'rgba(230,205,160,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 64, 64);
+  return c;
+})();
+// 地面：真上から見たテクスチャを、1〜2px の横帯ごとに奥行きに合わせて縮めて貼る
+const groundTex = new Image();
+let groundPat = null;
+groundTex.onload = () => { groundPat = ctx.createPattern(groundTex, 'repeat'); };
+groundTex.src = 'assets/textures/rocky_terrain_02_dry.jpg';
+const TILE = 760;      // テクスチャ1枚ぶんの大きさ（ワールドpx）
+const DEPTH_PX = 260;  // 奥行きの縮み具合
+function ground() {
+  const { near, vp, base } = view();
+  const top = Math.ceil(vp.y);
+  if (groundPat) {
+    const S = groundTex.width, step = 2;
+    ctx.fillStyle = groundPat;
+    for (let y = top; y < H; y += step) {
+      const sc = (y + step / 2 - vp.y) / (near.y - vp.y);
+      if (sc <= 0.004) continue;
+      const k = base * sc;                                // 画面px / ワールドpx（この帯での）
+      const cx = vp.x + (near.x - vp.x) * sc - camX * k;  // ワールドx=0 の画面位置
+      const a = TILE * k / S;
+      const v = ((DEPTH_PX / sc) / TILE * S) % S;
+      groundPat.setTransform(new DOMMatrix([a, 0, 0, 1, cx, y - v]));
+      ctx.fillRect(0, y, W, step);
+    }
+  } else {
+    ctx.fillStyle = '#a98756'; ctx.fillRect(0, top, W, H - top);
+  }
+  ctx.drawImage(getLayers().groundLight, 0, 0, W, H);
+}
+
 function background() {
-  const sky = ctx.createLinearGradient(0, 0, 0, H * 0.45);
-  sky.addColorStop(0, '#6f8fb6'); sky.addColorStop(1, '#e2cfa6');
-  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
-  const sun = ctx.createRadialGradient(W * 0.85, H * 0.28, 0, W * 0.85, H * 0.28, W * 0.5);
-  sun.addColorStop(0, 'rgba(255,225,160,0.9)'); sun.addColorStop(1, 'rgba(255,225,160,0)');
-  ctx.fillStyle = sun; ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = '#9b8f6b';
-  for (const h of hills) { ctx.beginPath(); ctx.ellipse(h.x * W, H * 0.44, h.w * W, h.h * H, 0, Math.PI, 0); ctx.fill(); }
-  const g = ctx.createLinearGradient(0, H * 0.42, 0, H);
-  g.addColorStop(0, '#c9b083'); g.addColorStop(0.4, '#a98756'); g.addColorStop(1, '#6e5233');
-  ctx.fillStyle = g; ctx.fillRect(0, H * 0.42, W, H);
-  const dust = ctx.createRadialGradient(W * 0.92, H * 0.5, 0, W * 0.92, H * 0.5, W * 0.4);
-  dust.addColorStop(0, 'rgba(225,200,150,0.6)'); dust.addColorStop(1, 'rgba(225,200,150,0)');
-  ctx.fillStyle = dust; ctx.fillRect(0, 0, W, H);
+  ctx.drawImage(getLayers().sky, 0, 0, W, H);
+  ground();
   // 勝ち・負けの線（地面の目印）
   for (const [line, color] of [[CFG.lineWin, '170,40,30'], [CFG.lineLose, '40,70,130']]) {
     const wx = -(line - CFG.lineStart) * LINE_PX + (line === CFG.lineWin ? GAP + RANK_GAP : -RANK_GAP * 1.5);
@@ -340,17 +412,16 @@ function draw(dt, now) {
   ctx.globalAlpha = 1;
   for (const m of motes) {
     m.x += m.v * dt; if (m.x > 1.1) m.x = -0.1;
-    ctx.fillStyle = `rgba(230,205,160,${m.a})`;
-    ctx.beginPath(); ctx.arc(m.x * W, m.y * H, m.r, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = m.a;
+    ctx.drawImage(moteImg, m.x * W - m.r, m.y * H - m.r, m.r * 2, m.r * 2);
   }
-  const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
-  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(20,10,0,0.55)');
-  ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = 1;
 }
 
 function updateFx(dt) {
   const S = game.S;
   shift += (-(S.line - CFG.lineStart) * LINE_PX - shift) * Math.min(1, dt * 5);
+  camX = shift * CAM_FOLLOW;
   for (const side of ['ally', 'enemy']) for (let i = 0; i < FILES; i++) enter[side][i] = Math.max(0, enter[side][i] - dt * 2.5);
   for (let i = dying.length - 1; i >= 0; i--) {
     const d = dying[i]; d.t += dt;
