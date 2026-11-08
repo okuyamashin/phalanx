@@ -7,8 +7,10 @@
 <style>
   :root { --fg:#f2e8d2; --gold:#e0b25a; }
   html,body { margin:0; height:100%; overflow:hidden; background:#1a140e; color:var(--fg);
-    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; }
-  canvas { display:block; width:100vw; height:100vh; touch-action:none; }
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+    touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+  canvas { display:block; touch-action:none; }
+  @media (max-width: 600px) { #overlay h1 { font-size:40px; } #overlay p { font-size:15px; } #overlay .dim { font-size:13px; } }
   #hud { position:fixed; left:0; right:0; top:0; display:flex; align-items:center; gap:16px;
     padding:10px 16px; background:linear-gradient(#000000aa,#00000000); pointer-events:none; font-size:15px; text-shadow:0 1px 2px #000; }
   #gauge { flex:1; max-width:420px; margin:0 auto; height:10px; background:#ffffff30; border-radius:5px; overflow:hidden; }
@@ -44,6 +46,7 @@ function resize() {
   const dpr = Math.min(devicePixelRatio || 1, 2);
   W = innerWidth; H = innerHeight;
   cv.width = W * dpr; cv.height = H * dpr;
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 addEventListener('resize', resize); resize();
@@ -75,7 +78,7 @@ function project(file, wx, rankY = 0) {
   const sc = 1 / (1 + file * 0.2);
   const near = { x: W * 0.38, y: H * 0.93 };
   const vp = { x: W * 0.16, y: H * 0.42 };
-  const unit = Math.min(W / 1500, H / 850) * sc;
+  const unit = Math.min(W / (H > W ? 950 : 1500), H / 850) * sc; // 縦長の画面では少し大きめに
   return { x: vp.x + (near.x - vp.x) * sc + wx * unit, y: vp.y + (near.y - vp.y) * sc - rankY * unit, unit };
 }
 // side: 'ally' | 'enemy', rank: 0=前列
@@ -156,7 +159,8 @@ addEventListener('keydown', e => {
   if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) doThrust(); }
   if (e.code === 'KeyR') { game.reset(); dying.length = corpses.length = 0; showOverlay(); }
 });
-cv.addEventListener('pointerdown', doThrust);
+// タイトルや結果の画面の上からでも押せるよう、画面全体で受け取る
+addEventListener('pointerdown', e => { e.preventDefault(); doThrust(); }, { passive: false });
 
 // ===== コマの選び方 =====
 function allyFrame(S) {
@@ -317,13 +321,14 @@ function showOverlay() {
       足元が<span style="color:#ffe08a">金色に光る敵</span>＝戻り中（狙いどき）<br>
       盾を構えた敵に突くと、弾かれて反撃されることがある<br>
       突いている間は無防備。守ってばかりだと敵が増えて押される。</p>
-      <p style="margin-top:18px">スペースで開始</p>`;
+      <p style="margin-top:18px">スペース（スマホはタップ）で開始</p>
+      ${innerHeight > innerWidth ? '<p class="dim">スマホは横向きがおすすめです</p>' : ''}`;
   } else {
     const win = S.phase === 'win';
     ov.innerHTML = `<h1>${win ? '勝利' : '敗北'}</h1>
       <p>${win ? `敵陣まで押し切った（${S.endT.toFixed(1)}秒）` : S.why}</p>
       <p class="dim">倒した敵 ${S.kills}　失った味方 ${S.lost}　突撃 ${S.thrusts}回</p>
-      <p style="margin-top:18px">スペースでもう一度</p>`;
+      <p style="margin-top:18px">スペース（スマホはタップ）でもう一度</p>`;
   }
 }
 function updateHud() {
