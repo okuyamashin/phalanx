@@ -2,7 +2,7 @@
 
 盾を並べて守り、号令で一斉に突く。古代ギリシャの重装歩兵の密集隊形（ファランクス）が、ペルシャの盾兵と押し合うブラウザゲームです。
 
-**▶ 遊ぶ：https://okuyamashin.github.io/phalanx/game.html**
+**▶ 遊ぶ：https://okuyamashin.github.io/phalanx/**
 
 パソコンでもスマホでも動きます。スマホは横向きがおすすめです。
 
@@ -34,26 +34,27 @@
 
 | ファイル | 内容 |
 |---|---|
-| `game.html` | **本編**。AIで描いた兵士の絵をコマ送りで動かす疑似3D版。描画は [PixiJS](https://pixijs.com/) 7.4.2（WebGL、MIT ライセンス、CDN から読み込み） |
-| `index.html` | 最初に作った2Dの試作（上から見た図） |
+| `index.html` | **本編**。AIで描いた兵士の絵をコマ送りで動かす疑似3D版。描画は [PixiJS](https://pixijs.com/) 7.4.2（WebGL、MIT ライセンス、CDN から読み込み） |
+| `proto2d.html` | 最初に作った2Dの試作（上から見た図） |
+| `game.html` | 以前の本編のURL。トップページへ移動する |
 | `3d.html` | Three.js で作った3Dの試作 |
 | `sprites.html` | 兵士の絵の動きを確認するページ（スペース：突く、D／E：味方／敵が倒れる、A：自動） |
 
 ## 手元で動かす
 
-`game.html` などは ES モジュールと素材ファイルを読み込むので、ファイルを直接開くのではなく、ローカルサーバー経由で開いてください。
+`index.html` などは ES モジュールと素材ファイルを読み込むので、ファイルを直接開くのではなく、ローカルサーバー経由で開いてください。
 
 ```bash
 python3 -m http.server 8000
 ```
 
-そのあと `http://localhost:8000/game.html` を開きます。
+そのあと `http://localhost:8000/` を開きます。
 
 ## ファイル構成
 
 ```
 src/game.js          ゲームのルール（描画や入力から独立）
-game.html            本編の描画・演出・入力
+index.html           本編の描画・演出・入力
 assets/
   sprites/           兵士のコマ（hoplite = 味方、persian = 敵）と、元の緑背景のシート（raw/）
   screens/           タイトル・勝敗の絵（raw/ に元のPNG）

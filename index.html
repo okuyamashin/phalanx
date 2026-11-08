@@ -5,56 +5,361 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Phalanx</title>
 <style>
-  :root { --bg:#14110d; --fg:#eadfc8; --dim:#9a8b70; --accent:#d9a441; }
-  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
-    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; overflow:hidden; }
-  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
-  canvas { background:#2a2419; max-width:100vw; max-height:100vh; touch-action:none; }
+  :root { --fg:#f2e8d2; --gold:#e0b25a; }
+  html,body { margin:0; height:100%; overflow:hidden; background:#1a140e; color:var(--fg);
+    font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+    touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+  canvas { display:block; touch-action:none; }
+  /* 右奥の砂煙と周辺の暗さ。キャンバスに毎回描くと重いので、上に重ねた板で表す */
+  /* 漂う砂ぼこり：キャンバスに描くと重いので、ゆっくり流れる板を2枚重ねる */
+  #dust { position:fixed; inset:0; pointer-events:none; overflow:hidden; }
+  #dust i { position:absolute; top:25%; left:0; width:200%; height:80%; opacity:.55;
+    background:
+      radial-gradient(ellipse 9% 14% at 8% 40%, rgba(230,205,160,.22), transparent 70%),
+      radial-gradient(ellipse 12% 10% at 22% 70%, rgba(230,205,160,.18), transparent 70%),
+      radial-gradient(ellipse 8% 16% at 37% 30%, rgba(230,205,160,.2), transparent 70%),
+      radial-gradient(ellipse 14% 12% at 49% 65%, rgba(230,205,160,.16), transparent 70%),
+      radial-gradient(ellipse 9% 14% at 58% 40%, rgba(230,205,160,.22), transparent 70%),
+      radial-gradient(ellipse 12% 10% at 72% 70%, rgba(230,205,160,.18), transparent 70%),
+      radial-gradient(ellipse 8% 16% at 87% 30%, rgba(230,205,160,.2), transparent 70%),
+      radial-gradient(ellipse 14% 12% at 99% 65%, rgba(230,205,160,.16), transparent 70%);
+    animation: drift 70s linear infinite; will-change: transform; }
+  #dust i:nth-child(2) { top:45%; animation-duration:110s; animation-delay:-40s; opacity:.4; }
+  @keyframes drift { from { transform:translateX(-50%); } to { transform:translateX(0); } }
+  #air { position:fixed; inset:0; pointer-events:none;
+    background:
+      radial-gradient(ellipse 60% 55% at 50% 50%, transparent 55%, rgba(20,10,0,.55) 100%),
+      radial-gradient(circle at 92% 50%, rgba(225,200,150,.35), rgba(225,200,150,0) 40%); }
+  @media (max-width: 600px) { #overlay h1 { font-size:40px; } #overlay p { font-size:15px; } #overlay .dim { font-size:13px; } }
+  #hud { position:fixed; left:0; right:0; top:0; display:flex; align-items:center; gap:16px;
+    padding:10px 16px; background:linear-gradient(#000000aa,#00000000); pointer-events:none; font-size:15px; text-shadow:0 1px 2px #000; }
+  #gauge { flex:1; max-width:420px; margin:0 auto; height:10px; background:#ffffff30; border-radius:5px; overflow:hidden; }
+  #gaugeFill { height:100%; width:50%; background:var(--gold); }
+  #hud .side { display:flex; align-items:center; gap:8px; min-width:90px; }
+  #hud .side:last-child { justify-content:flex-end; }
+  #hud b, .stats b { font-family: Georgia, "Times New Roman", serif; font-weight:normal; font-size:20px; letter-spacing:.06em; }
+  .ico { display:inline-block; flex:none; box-shadow:0 1px 3px #000a; }
+  .ico.aspis { width:18px; height:18px; border-radius:50%; background:radial-gradient(circle at 40% 35%, #f0cf8a, #a8742c 60%, #6e4a1a); }
+  .ico.spara { width:12px; height:18px; border-radius:3px; background:repeating-linear-gradient(#d2ae74 0 2px, #8a6a3a 2px 4px); }
+  #overlay { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:#000000b0; text-align:center; padding:16px; }
+  #overlay h1 { font-family: Georgia, serif; color:var(--gold); font-size:56px; margin:0 0 18px; letter-spacing:.08em; }
+  #overlay p { margin:6px 0; font-size:17px; line-height:1.5; }
+  #overlay .dim { color:#c8bba0; font-size:15px; }
+  .hidden { display:none !important; }
+  /* 勝敗の画面：崖から落とされる絵を背景に */
+  #overlay.end { justify-content:flex-start; padding-top:7vh; background:#000; overflow:hidden; }
+  #overlay.end .bg { position:absolute; inset:0; background-size:cover; background-position:center;
+    animation: endZoom 6s ease-out both; z-index:-1; }
+  #overlay.end::after { content:''; position:absolute; inset:0; z-index:-1;
+    background:linear-gradient(#000000b0, #00000020 40%, #00000000 65%, #000000c0); }
+  #overlay.end > * { position:relative; animation: endFade 1.2s ease-out both; }
+  #overlay.end p { text-shadow:0 2px 6px #000; }
+  #overlay.end h1 { font-size:72px; text-shadow:0 3px 12px #000; }
+  #overlay.win .bg { background-image:url(assets/screens/victory.jpg); }
+  #overlay.lose .bg { background-image:url(assets/screens/defeat.jpg); }
+  #overlay.lose { align-items:flex-start; text-align:left; padding-left:6vw; }  /* 敗北の絵は右上に敵がいるので文字は左へ */
+  #overlay.lose h1 { color:#e8d2b0; }
+  #overlay { isolation:isolate; }
+  /* タイトル：両軍の整列の絵を、横に流しながらフェードで切り替える */
+  #overlay.title { background:#000; justify-content:flex-start; padding-top:7vh; overflow:hidden; }
+  #overlay.title::after { content:''; position:absolute; inset:0; z-index:-1;
+    background:linear-gradient(#000000c0, #00000030 35%, #00000000 55%, #000000d0); }
+  #overlay.title.gate { justify-content:center; padding-top:0; background:radial-gradient(circle at 50% 45%, #2a2016, #000 70%); }
+  #overlay.title.gate .start { margin:22px 0 8px; font-size:22px; letter-spacing:0; }
+  #overlay.title.gate .key { margin:0; }
+  #slides { position:absolute; inset:0; z-index:-2; overflow:hidden; }
+  #slides div { position:absolute; inset:0; background-size:cover; background-position:center;
+    opacity:0; transition:opacity 1.8s ease; will-change:transform, opacity; }
+  #slides div.show { opacity:1; }
+  #slides div.pan-l { animation:panL 9.5s linear both; }
+  #slides div.pan-r { animation:panR 9.5s linear both; }
+  @keyframes panL { from { transform:scale(1.18) translateX(6%); } to { transform:scale(1.18) translateX(-6%); } }
+  @keyframes panR { from { transform:scale(1.18) translateX(-6%); } to { transform:scale(1.18) translateX(6%); } }
+  #overlay.title h1 { font-size:84px; margin-bottom:6px; text-shadow:0 4px 16px #000; animation:endFade 1.4s ease-out both; }
+  #overlay.title .start { margin:auto 0 4px; font-family:Georgia, serif; font-size:30px; letter-spacing:.35em; color:#f2e8d2;
+    text-shadow:0 2px 8px #000; animation:blink 1.6s ease-in-out infinite; }
+  #overlay.title .key { margin:0 0 5vh; font-size:11px; letter-spacing:.3em; color:#f2e8d2aa; }
+  #overlay.end .stats { display:flex; align-items:center; gap:10px; font-size:20px; animation-delay:.4s; }
+  #overlay.end .again { font-size:28px; margin-top:10px; opacity:.8; }
+  @keyframes blink { 50% { opacity:.35; } }
+  @media (max-height: 500px) {
+    #overlay.title { padding-top:3vh; }
+    #overlay.title h1 { font-size:46px; }
+    #overlay.title .start { font-size:22px; }
+    #overlay.title .key { margin-bottom:3vh; }
+  }
+  @keyframes endZoom { from { transform:scale(1.12); filter:brightness(.6); } to { transform:scale(1); filter:brightness(1); } }
+  @keyframes endFade { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:none; } }
+  @media (max-height: 500px) { #overlay.end h1 { font-size:44px; margin-bottom:8px; } #overlay.end p { font-size:14px; margin:3px 0; } }
+  /* 奥の列の敵の様子（手前の兵に隠れて見えない分を補う） */
+  #pips { position:fixed; top:34px; left:50%; transform:translateX(-50%); display:flex; gap:5px; align-items:center;
+    padding:4px 8px; border-radius:10px; background:#00000055; pointer-events:none; }
+  #pips i { width:12px; height:12px; border-radius:50%; background:#ffffff30; box-shadow:0 0 0 1px #0006 inset; }
+  #pips i.red { background:#ff4a3a; box-shadow:0 0 8px #ff4a3a; }
+  #pips i.gold { background:#ffd46e; box-shadow:0 0 8px #ffd46e; }
+  #pips i.gap { background:transparent; box-shadow:0 0 0 1px #ffffff40 inset; }
+  #pips i.us { width:4px; border-radius:2px; height:12px; }
+  #pips span { font-size:11px; color:#f2e8d2aa; margin:0 4px; }
 </style>
 </head>
 <body>
-<div id="wrap"><canvas id="c" width="960" height="640"></canvas></div>
-<script>
-'use strict';
-// ===== 設定 =====
-const CFG = {
-  cols: 11,
-  colW: 76,
-  rankGap: 26,
-  reserves: 40,          // 自軍の予備兵
-  enemyStartDepth: 3,    // 敵の各列の初期の後列数
-  enemyMaxDepth: 9,
-  lineStart: 340, lineWin: 120, lineLose: 575,
-  thrustHitAt: 0.14, thrustEnd: 0.8, // 突きの当たり判定時刻と、無防備が終わる時刻
-  counterChance: 0.25,   // 守っている敵に突いたとき反撃される確率
-  gapExposeChance: 0.5,  // 右隣が空いているとき、守っていても倒される確率
-  ourRefill: 0.7, enemyRefill: 0.5,
-  pushPerEnemy: 0.32, pushBase: 12, pushPerKill: 3.5, pushPerBlock: 1.2,
-  enemy: { guardMin: 1.1, guardMax: 3.6, windup: 0.6, strike: 0.2, recover: 0.75 },
-  spawnStart: 1.3, spawnMin: 0.55, spawnRamp: 0.012,
-};
+<canvas id="c"></canvas>
+<div id="air"></div>
+<div id="dust"><i></i><i></i></div>
+<div id="hud">
+  <span class="side"><i class="ico aspis"></i><b id="ally"></b></span>
+  <div id="gauge"><div id="gaugeFill"></div></div>
+  <span class="side"><b id="foe"></b><i class="ico spara"></i></span>
+</div>
+<div id="pips"></div>
+<div id="overlay"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@7.4.2/dist/pixi.min.js"></script>
+<script type="module">
+// スプライト（疑似3D）の見た目を、src/game.js のルールにつないだ本編。
+// 描画は PixiJS（WebGL）。大量の兵の絵をまとめてGPUに描かせる
+import { CFG, createGame } from './src/game.js';
+
+const PIXI = window.PIXI;
 const cv = document.getElementById('c');
-const ctx = cv.getContext('2d');
-const W = cv.width, H = cv.height;
-const X0 = (W - CFG.cols * CFG.colW) / 2 + CFG.colW / 2;
-const colX = i => X0 + i * CFG.colW;
+let W = innerWidth, H = innerHeight;
+// 描画の細かさ。スマホ（指で操作する端末）は画面がとても細かいので少し下げる
+let DPR = 1;
+const calcDpr = () => Math.min(devicePixelRatio || 1, matchMedia('(pointer: coarse)').matches ? 1.5 : 2);
+DPR = calcDpr();
+const renderer = PIXI.autoDetectRenderer({ view: cv, width: W, height: H, resolution: DPR, autoDensity: true,
+  antialias: false, backgroundColor: 0x1a140e, powerPreference: 'high-performance' });
+const stage = new PIXI.Container();
+const world = new PIXI.Container(); stage.addChild(world);   // 画面の揺れはこの入れ物ごと動かす
+function resize() {
+  W = innerWidth; H = innerHeight; DPR = calcDpr();
+  renderer.resolution = DPR; renderer.resize(W, H);
+}
+addEventListener('resize', resize); resize();
 
-// ===== 入力（あとでスマホのセンサーに差し替えられるように分離） =====
-const Input = {
-  handlers: [],
-  onThrust(fn) { this.handlers.push(fn); },
-  fire() { this.handlers.forEach(f => f()); },
-};
-addEventListener('keydown', e => {
-  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) Input.fire(); }
-  if (e.code === 'KeyR') reset();
-});
-cv.addEventListener('pointerdown', () => Input.fire());
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const ease = t => t * t * (3 - 2 * t);
+
+// ===== 素材 =====
+const SPRITES = { hoplite: {}, persian: {} };
+function loadSprite(name) {
+  const s = SPRITES[name];
+  return Promise.all([
+    fetch(`assets/sprites/${name}.json`).then(r => r.json()).then(m => { s.meta = m; }),
+    new Promise((ok, ng) => { s.img = new Image(); s.img.onload = ok; s.img.onerror = ng; s.img.src = `assets/sprites/${name}.webp`; }),
+  ]).then(() => {
+    // 縮小用のミップマップを GPU に作らせる（奥の小さな兵がちらつかない）
+    const base = PIXI.BaseTexture.from(s.img, { mipmap: PIXI.MIPMAP_MODES.ON, scaleMode: PIXI.SCALE_MODES.LINEAR });
+    s.tex = {};
+    for (const [name, f] of Object.entries(s.meta.frames)) s.tex[name] = new PIXI.Texture(base, new PIXI.Rectangle(f.x, f.y, f.w, f.h));
+  });
+}
+const BODY_PX = 330;   // 手前の兵の身長（unit=1のときの画面px）
+
+// ===== 配置 =====
+const FILES = CFG.cols;          // 奥に向かう人数（ルール上の「列」）
+const SHOW_RANKS = 3;            // 見せる前後の列数（前列＋後ろ2列）
+const GAP = 330;                 // 味方の前列と敵の前列の間
+const RANK_GAP = 170;
+const LINE_PX = 0.9;             // 押し合いの位置（ルール）→ 画面のずれ
+let shift = 0;                   // 隊列全体の左右のずれ（押されると左へ）
+
+// 横向きは迫力重視：手前の兵が画面の高さの86%になる大きさ。縦向きは全体が見える大きさ。
+// URLに ?zoom=0.6 のように付けると、さらに倍率を掛けられる（試し用）
+const ZOOM = +new URLSearchParams(location.search).get('zoom') || 1;
+const landscape = () => W > H;
+// カメラは隊列を半分ほど追いかける。押されると地面や倒れた兵が流れて見える
+const CAM_FOLLOW = 0.6;
+let camX = 0;
+function view() {
+  return {
+    near: { x: W * 0.38, y: H * (landscape() ? 0.985 : 0.93) },
+    vp: { x: W * 0.16, y: H * 0.42 },
+    base: (landscape() ? H * 0.86 / BODY_PX : Math.min(W / 950, H / 850)) * ZOOM,
+  };
+}
+function project(file, wx, rankY = 0) {
+  const { near, vp, base } = view();
+  const sc = 1 / (1 + file * 0.2);
+  const unit = base * sc;
+  return { x: vp.x + (near.x - vp.x) * sc + (wx - camX) * unit, y: vp.y + (near.y - vp.y) * sc - rankY * unit, unit };
+}
+// side: 'ally' | 'enemy', rank: 0=前列
+const slotX = (side, rank) => shift + (side === 'ally' ? -rank * RANK_GAP : GAP + rank * RANK_GAP);
+
+// ===== 演出用の状態 =====
+const enter = { ally: new Array(FILES).fill(0), enemy: new Array(FILES).fill(0) };
+const dying = [];    // 倒れる途中の兵 { side, file, wx, t }
+const corpses = [];  // 地面の兵 { side, file, wx, t }
+const fx = [];       // 火花・血
+const texts = [];    // 浮かぶ文字
+let shake = 0;
+
+function burst(file, wx, y, color, n, speed = 160) {
+  for (let k = 0; k < n; k++) fx.push({ file, wx, y, vx: rand(-speed, speed), vy: rand(-speed * 1.2, speed * 0.3), life: rand(0.25, 0.55), color });
+}
+function say(file, wx, text, color, size = 15, y = 300) { texts.push({ file, wx, y, text, color, size, life: 1 }); }
 
 // ===== 音 =====
 let ac = null;
-function audio() { if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} } return ac; }
+function audio() {
+  if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); loadSamples(); } catch (e) {} }
+  if (ac && ac.state === 'suspended') ac.resume();
+  return ac;
+}
+// 効果音（Kenney の CC0 素材）。読み込めなかった音は、プログラムで作った音で代用する
+const SAMPLE_SETS = { bronze: 5, wicker: 5, hit: 5, fall: 5, step: 5, clatter: 3 };
+const SAMPLE_FILES = { bronze: 'shield_bronze', wicker: 'shield_wicker', hit: 'hit', fall: 'fall', step: 'step', clatter: 'clatter' };
+const samples = {};
+// 勝敗の曲（assets/music/victory.mp3・defeat.mp3）。ファイルがなければ鳴らさない
+const music = {};
+let musicNode = null;
+function loadMusic() {
+  for (const name of ['victory', 'defeat']) {
+    fetch(`assets/music/${name}.mp3`).then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); })
+      .then(buf => new Promise((ok, ng) => ac.decodeAudioData(buf, ok, ng)))
+      .then(b => { music[name] = b; }).catch(() => {});
+  }
+}
+function playMusic(name) {
+  stopMusic();
+  const a = ac, b = music[name];
+  if (!a || !b) return;
+  const src = a.createBufferSource(), g = a.createGain(), t = a.currentTime;
+  src.buffer = b;
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.55, t + 0.6); // 絵に合わせて少しフェードイン
+  src.connect(g).connect(a.destination); src.start(t);
+  musicNode = { src, g };
+}
+// タイトル曲は長い（約3分半）ので、全部読み込むのを待たず、読み込みながら再生してループする
+const titleAudio = new Audio('assets/music/title.mp3');
+titleAudio.loop = true; titleAudio.preload = 'auto';
+let titleGain = null;
+function startTitleMusic() {
+  const a = ac; if (!a) return;
+  if (!titleGain) {
+    titleGain = a.createGain();
+    a.createMediaElementSource(titleAudio).connect(titleGain).connect(a.destination);
+  }
+  const t = a.currentTime;
+  titleGain.gain.cancelScheduledValues(t); titleGain.gain.setValueAtTime(0.0001, t);
+  titleGain.gain.exponentialRampToValueAtTime(0.5, t + 2.5);
+  titleAudio.currentTime = 0;
+  titleAudio.play().catch(() => {});
+}
+function stopTitleMusic() {
+  if (!titleGain || titleAudio.paused) return;
+  const t = ac.currentTime;
+  titleGain.gain.cancelScheduledValues(t); titleGain.gain.setValueAtTime(titleGain.gain.value, t);
+  titleGain.gain.linearRampToValueAtTime(0, t + 0.8);
+  setTimeout(() => titleAudio.pause(), 900);
+}
+function stopMusic() {
+  if (!musicNode || !ac) return;
+  const { src, g } = musicNode, t = ac.currentTime;
+  g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(g.gain.value, t); g.gain.linearRampToValueAtTime(0, t + 0.4);
+  src.stop(t + 0.45); musicNode = null;
+}
+function loadSamples() {
+  loadMusic();
+  for (const [key, n] of Object.entries(SAMPLE_SETS)) {
+    samples[key] = [];
+    for (let i = 0; i < n; i++) {
+      fetch(`assets/sounds/${SAMPLE_FILES[key]}_${i}.ogg`).then(r => r.arrayBuffer())
+        .then(buf => new Promise((ok, ng) => ac.decodeAudioData(buf, ok, ng)))
+        .then(b => samples[key].push(b)).catch(() => {});
+    }
+  }
+}
+// 同じ音でも毎回少し高さと大きさを変えて、機械っぽさを消す
+function play(key, vol = 1, delay = 0, rate = 1, dest = null) {
+  const a = ac, list = samples[key];
+  if (!a || !list || !list.length) return false;
+  const src = a.createBufferSource(), g = a.createGain();
+  src.buffer = list[Math.floor(Math.random() * list.length)];
+  src.playbackRate.value = rate * (0.9 + Math.random() * 0.2);
+  g.gain.value = vol * (0.8 + Math.random() * 0.3);
+  src.connect(g).connect(dest || a.destination);
+  src.start(a.currentTime + delay);
+  return true;
+}
+
+// ===== 戦闘中の空気：どよめき・風・遠くの盾の音・押されるほど速くなる太鼓 =====
+// すべてその場で作る音（どよめきと風は、ノイズを声や風の帯域に絞ったもの）
+const Battle = { on: false };
+function danger() {
+  // 0 = 押し返している／開始位置、1 = 崖ぎわ
+  const S = game.S;
+  return clamp01((S.line - CFG.lineStart) / (CFG.lineLose - CFG.lineStart));
+}
+function noiseBuffer(a, sec = 2) {
+  const n = a.sampleRate * sec, b = a.createBuffer(1, n, a.sampleRate), d = b.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < n; i++) { const w = Math.random() * 2 - 1; last = (last + 0.02 * w) / 1.02; d[i] = w * 0.5 + last * 3; } // 白と茶色のノイズを混ぜる
+  return b;
+}
+function startBattleAudio() {
+  const a = ac; if (!a || Battle.on) return;
+  const t = a.currentTime, nb = noiseBuffer(a);
+  const bus = a.createGain(); bus.gain.setValueAtTime(0.0001, t); bus.gain.exponentialRampToValueAtTime(1, t + 2);
+  bus.connect(a.destination);
+  const loop = () => { const s = a.createBufferSource(); s.buffer = nb; s.loop = true; s.loopStart = Math.random(); s.start(t, Math.random() * 1.5); return s; };
+  const lfo = (freq, depth, target) => { const o = a.createOscillator(), g = a.createGain(); o.frequency.value = freq; g.gain.value = depth; o.connect(g).connect(target); o.start(t); return o; };
+  // どよめき：人の声の帯域（400Hz・900Hz）に絞ったノイズを、ゆっくり波打たせる
+  const crowd = a.createGain(); crowd.gain.value = 0.05; crowd.connect(bus);
+  const srcs = [];
+  for (const [f, q] of [[420, 1.2], [880, 2.5]]) {
+    const s = loop(), bp = a.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = q;
+    s.connect(bp).connect(crowd); srcs.push(s);
+  }
+  const o1 = lfo(0.13, 0.02, crowd.gain), o2 = lfo(0.31, 0.012, crowd.gain);
+  // 風：低い帯域のノイズ
+  const wind = a.createGain(); wind.gain.value = 0.035; wind.connect(bus);
+  const ws = loop(), lp = a.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 380;
+  ws.connect(lp).connect(wind); srcs.push(ws);
+  const o3 = lfo(0.07, 0.02, wind.gain);
+  // 遠くの盾の音：こもらせて小さく鳴らす
+  const far = a.createBiquadFilter(); far.type = 'lowpass'; far.frequency.value = 900; far.connect(bus);
+  // 太鼓
+  const drum = a.createGain(); drum.gain.value = 0.25; drum.connect(bus);
+  Object.assign(Battle, { on: true, bus, crowd, drum, far, srcs, oscs: [o1, o2, o3], nextBeat: t + 0.5, nextClash: t + 1 });
+  Battle.timer = setInterval(battleTick, 50);
+}
+function drumHit(time, vol, freq) {
+  const a = ac, o = a.createOscillator(), g = a.createGain();
+  o.frequency.setValueAtTime(freq, time); o.frequency.exponentialRampToValueAtTime(freq * 0.5, time + 0.25);
+  g.gain.setValueAtTime(0.0001, time); g.gain.exponentialRampToValueAtTime(vol, time + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, time + 0.45);
+  o.connect(g).connect(Battle.drum); o.start(time); o.stop(time + 0.5);
+}
+function battleTick() {
+  const a = ac; if (!a || !Battle.on) return;
+  const d = danger(), now = a.currentTime;
+  // 押されるほど：太鼓が速く大きく、どよめきも大きく
+  const bpm = 62 + 86 * d;
+  Battle.drum.gain.setTargetAtTime(0.22 + 0.45 * d, now, 0.5);
+  Battle.crowd.gain.setTargetAtTime(0.045 + 0.06 * d, now, 0.8);
+  while (Battle.nextBeat < now + 0.15) {
+    const beat = 60 / bpm;
+    drumHit(Battle.nextBeat, 0.9, 92);                         // ドン
+    drumHit(Battle.nextBeat + beat * 0.3, 0.45, 78);           // ドッ（心臓の鼓動のように2つで1組）
+    Battle.nextBeat += beat;
+  }
+  if (now > Battle.nextClash) {
+    play(Math.random() < 0.5 ? 'bronze' : 'wicker', 0.12 + 0.1 * d, 0, 0.85, Battle.far);
+    Battle.nextClash = now + rand(0.25, 1.1) * (1.2 - d * 0.6);
+  }
+}
+function stopBattleAudio(fade = 1.2) {
+  if (!Battle.on) return;
+  const a = ac, t = a.currentTime, B = { ...Battle };
+  Battle.on = false; clearInterval(B.timer);
+  B.bus.gain.cancelScheduledValues(t); B.bus.gain.setValueAtTime(B.bus.gain.value, t); B.bus.gain.linearRampToValueAtTime(0, t + fade);
+  for (const n of [...B.srcs, ...B.oscs]) n.stop(t + fade + 0.05);
+  setTimeout(() => B.bus.disconnect(), (fade + 0.2) * 1000);
+}
 function tone(freq, dur, type = 'sine', vol = 0.3, slide = 0) {
   const a = audio(); if (!a) return;
   const o = a.createOscillator(), g = a.createGain(), t = a.currentTime;
@@ -71,310 +376,405 @@ function noise(dur, vol = 0.2, hp = 2000) {
   f.type = 'highpass'; f.frequency.value = hp; g.gain.value = vol;
   s.buffer = b; s.connect(f).connect(g).connect(a.destination); s.start();
 }
-let sfxBudget = 0; // 同時に鳴りすぎないように
+let sfxBudget = 0;
 const SFX = {
-  drum() { tone(70, 0.35, 'sine', 0.6, 0.5); noise(0.08, 0.15, 400); },
-  clang() { if (sfxBudget-- > 0) { noise(0.09, 0.12, 3000); tone(1400 + Math.random() * 600, 0.08, 'square', 0.03); } },
-  kill() { if (sfxBudget-- > 0) tone(180, 0.15, 'sawtooth', 0.08, 0.4); },
-  hurt() { if (sfxBudget-- > 0) tone(110, 0.25, 'triangle', 0.18, 0.5); },
+  // 号令：太鼓と、隊全体が一歩踏み込む足音
+  drum() {
+    tone(65, 0.45, 'sine', 0.7, 0.5); noise(0.12, 0.2, 300);
+    for (let k = 0; k < 4; k++) play('step', 0.9, 0.02 + k * 0.035 + Math.random() * 0.02, 0.8);
+  },
+  // 敵の攻撃を青銅の盾で受けた
+  bronze() { if (sfxBudget-- > 0 && !play('bronze', 0.55)) { noise(0.09, 0.12, 3000); tone(1400 + Math.random() * 600, 0.08, 'square', 0.03); } },
+  // 突きが編み細工の盾に弾かれた
+  wicker() { if (sfxBudget-- > 0 && !play('wicker', 0.7)) noise(0.08, 0.12, 1500); },
+  // 敵を突き倒した
+  kill() { if (sfxBudget-- > 0 && !play('hit', 0.8)) tone(180, 0.15, 'sawtooth', 0.08, 0.4); },
+  // 味方が倒れた：倒れる音と、盾が地面に当たる音
+  hurt() { if (sfxBudget-- > 0) { if (!play('fall', 0.9)) tone(110, 0.25, 'triangle', 0.18, 0.5); play('clatter', 0.35, 0.18, 0.8); } },
 };
 
-// ===== 状態 =====
-let S;
-function reset() {
-  S = {
-    phase: 'title', t: 0,
-    line: CFG.lineStart, lineVis: CFG.lineStart,
-    reserves: CFG.reserves,
-    thrustT: -1, // <0: 守り
-    ours: [], enemies: [], depth: [],
-    spawnTimer: CFG.spawnStart, spawnInt: CFG.spawnStart,
-    fx: [], texts: [], corpses: [], pending: [],
-    kills: 0, lost: 0, thrusts: 0, shake: 0,
-  };
-  for (let i = 0; i < CFG.cols; i++) {
-    S.ours.push({ alive: true, refill: 0, hitFlash: 0 });
-    S.enemies.push(newEnemy());
-    S.depth.push(CFG.enemyStartDepth);
+// ===== ルールとつなぐ =====
+const contactX = () => shift + GAP / 2;
+const game = createGame((type, i, why) => {
+  if (type === 'thrust') {
+    SFX.drum();
+  } else if (type === 'blocked' || type === 'clash') {
+    burst(i, contactX(), 260, '#fff2b0', type === 'clash' ? 5 : 8);
+    if (type === 'clash') SFX.bronze(); else SFX.wicker();
+  } else if (type === 'ourDeath') {
+    dying.push({ side: 'ally', file: i, wx: slotX('ally', 0), t: 0 });
+    burst(i, slotX('ally', 0) + 40, 230, '#8a1010', 12, 120);
+    SFX.hurt(); if (i < 4) shake = Math.max(shake, 6);
+  } else if (type === 'enemyDeath') {
+    dying.push({ side: 'enemy', file: i, wx: slotX('enemy', 0), t: 0 });
+    burst(i, slotX('enemy', 0) - 40, 230, '#8a1010', 10, 120);
+    SFX.kill();
+  } else if (type === 'ourRefill') {
+    enter.ally[i] = 1;
+  } else if (type === 'enemyRefill') {
+    enter.enemy[i] = 1;
+  } else if (type === 'start') {
+    stopTitleMusic(); startBattleAudio();
+    stopMusic();
+    dying.length = corpses.length = fx.length = texts.length = 0;
+    shift = 0; showOverlay();
+  } else if (type === 'end') {
+    stopBattleAudio(); playMusic(i === 'win' ? 'victory' : 'defeat'); endShownAt = performance.now();
+    showOverlay();
   }
-}
-function newEnemy() {
-  return { alive: true, refill: 0, state: 'guard', st: rand(CFG.enemy.guardMin, CFG.enemy.guardMax), hitFlash: 0, resolved: false };
-}
-const rand = (a, b) => a + Math.random() * (b - a);
-const ourY = () => S.lineVis + 22;
-const enY = () => S.lineVis - 22;
-const exposed = () => S.thrustT >= 0 && S.thrustT < CFG.thrustEnd;
-
-Input.onThrust(() => {
-  audio();
-  if (S.phase === 'title') { S.phase = 'play'; return; }
-  if (S.phase !== 'play') { reset(); S.phase = 'play'; return; }
-  if (S.thrustT >= 0) return; // 突きの途中
-  S.thrustT = 0; S.resolvedThrust = false; S.thrusts++;
-  SFX.drum();
-  addText(W / 2, ourY() + 70, '突け！', '#d9a441', 22);
 });
 
-// ===== 判定 =====
-function killOurs(i, why) {
-  const o = S.ours[i]; if (!o.alive) return;
-  o.alive = false; o.refill = CFG.ourRefill; S.lost++;
-  S.corpses.push({ x: colX(i) + rand(-8, 8), y: ourY() + rand(0, 10), side: 0, life: 6 });
-  burst(colX(i), ourY(), '#c0392b', 10);
-  addText(colX(i), ourY() + 30, why, '#ff7b6b', 13);
-  SFX.hurt(); S.shake = Math.max(S.shake, 5);
-}
-function killEnemy(i) {
-  const e = S.enemies[i]; if (!e.alive) return;
-  e.alive = false; e.refill = CFG.enemyRefill; S.kills++;
-  S.corpses.push({ x: colX(i) + rand(-8, 8), y: enY() - rand(0, 10), side: 1, life: 6 });
-  burst(colX(i), enY(), '#e8d4a0', 8);
-  S.line -= CFG.pushPerKill;
-  SFX.kill();
-}
-function resolveThrust() {
-  for (let i = 0; i < CFG.cols; i++) {
-    const o = S.ours[i], e = S.enemies[i];
-    if (!o.alive || !e.alive) continue;
-    if (e.state === 'guard') {
-      clash(colX(i), S.lineVis);
-      if (Math.random() < CFG.counterChance) S.pending.push({ at: S.t + 0.12, fn: () => { if (exposed()) killOurs(i, '反撃'); } });
-    } else if (e.state === 'strike') {
-      killEnemy(i);
-      if (Math.random() < 0.5) killOurs(i, '相打ち');
-    } else {
-      killEnemy(i); // 構え中・戻り中はスキ
-    }
+window.phalanx = game; // 開発中の確認用（コンソールから状態を見たり変えたりできる）
+window.phalanxBattle = Battle;
+
+// 入力（あとでスマホのセンサーに差し替えられるよう、ここだけに集める）
+// 最初のタップでは、ゲームを始めずに音を有効にしてタイトル（曲とスライドショー）に入る
+let entered = false;
+function doThrust() {
+  audio();
+  if (!entered && game.S.phase === 'title') { entered = true; startTitleMusic(); showOverlay(); return; }
+  if (game.S.phase === 'win' || game.S.phase === 'lose') {
+    // 勝敗の画面からはタイトル（オープニング）に戻る。
+    // 戦闘中の連打でうっかり飛ばさないよう、出てから少しの間は受け付けない
+    if (performance.now() - endShownAt < 1500) return;
+    backToTitle(); return;
   }
-  // 突かれた敵は警戒して盾を固める（連打は通じない）
-  for (const e of S.enemies) {
-    if (e.alive && e.state !== 'strike' && e.state !== 'windup') { e.state = 'guard'; e.st = Math.max(e.st, rand(0.8, 2.2)); }
-  }
+  game.thrust();
 }
-function enemyStrike(i) {
-  const o = S.ours[i];
-  if (!o.alive) { S.line += CFG.pushPerBlock * 2; return; } // 穴に入り込まれる
-  if (exposed()) { killOurs(i, '突かれた'); return; }
-  const rightGap = i < CFG.cols - 1 && !S.ours[i + 1].alive;
-  if (rightGap && Math.random() < CFG.gapExposeChance) { killOurs(i, '右が空いた'); return; }
-  clash(colX(i), S.lineVis); o.hitFlash = 0.15;
-  S.line += CFG.pushPerBlock;
+let endShownAt = 0;
+function backToTitle() {
+  stopMusic(); stopBattleAudio(0.4);
+  game.reset(); dying.length = corpses.length = 0;
+  showOverlay(); startTitleMusic();
 }
+addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) doThrust(); }
+  if (e.code === 'KeyR') { if (entered) backToTitle(); else { game.reset(); showOverlay(); } }
+});
+// タイトルや結果の画面の上からでも押せるよう、画面全体で受け取る
+addEventListener('pointerdown', e => { e.preventDefault(); doThrust(); }, { passive: false });
 
-// ===== 演出 =====
-function burst(x, y, color, n) {
-  for (let k = 0; k < n; k++) S.fx.push({ x, y, vx: rand(-90, 90), vy: rand(-90, 90), life: rand(0.3, 0.6), color });
+// ===== コマの選び方 =====
+function allyFrame(S) {
+  const t = S.thrustT;
+  if (t < 0) return { a: 'guard', dx: 0, breathe: true };
+  if (t < 0.07) return { a: 'windup', dx: -10 * ease(t / 0.07) };
+  if (t < 0.45) return { a: 'thrust', dx: 26 * ease(clamp01((t - 0.07) / 0.07)), blur: t < 0.16 ? 'windup' : null };
+  const b = clamp01((t - 0.45) / (CFG.thrustEnd - 0.45));
+  return { a: 'guard', dx: 26 * (1 - ease(b)), ghost: 'thrust', ghostA: 1 - b };
 }
-function clash(x, y) { burst(x, y, '#fff2b0', 4); SFX.clang(); }
-function addText(x, y, s, color, size) { S.texts.push({ x, y, s, color, size, life: 0.9 }); }
-
-// ===== 更新 =====
-function update(dt) {
-  S.t += dt; sfxBudget = 3;
-  S.shake = Math.max(0, S.shake - dt * 30);
-  S.lineVis += (S.line - S.lineVis) * Math.min(1, dt * 6);
-  S.fx = S.fx.filter(p => (p.x += p.vx * dt, p.y += p.vy * dt, p.vx *= 0.9, p.vy *= 0.9, (p.life -= dt) > 0));
-  S.texts = S.texts.filter(t => (t.y -= 20 * dt, (t.life -= dt) > 0));
-  S.corpses = S.corpses.filter(c => (c.life -= dt) > 0);
-  if (S.phase !== 'play') return;
-
-  // 予約イベント（反撃など）
-  S.pending = S.pending.filter(p => (S.t >= p.at ? (p.fn(), false) : true));
-
-  // 突き
-  if (S.thrustT >= 0) {
-    S.thrustT += dt;
-    if (!S.resolvedThrust && S.thrustT >= CFG.thrustHitAt) { S.resolvedThrust = true; resolveThrust(); }
-    if (S.thrustT >= CFG.thrustEnd) S.thrustT = -1;
-  }
-
-  // 自軍の補充
-  for (const o of S.ours) {
-    o.hitFlash = Math.max(0, o.hitFlash - dt);
-    if (!o.alive && S.reserves > 0) {
-      o.refill -= dt;
-      if (o.refill <= 0) { o.alive = true; S.reserves--; }
-    }
-  }
-
-  // 敵
-  const E = CFG.enemy;
-  for (let i = 0; i < CFG.cols; i++) {
-    const e = S.enemies[i];
-    e.hitFlash = Math.max(0, e.hitFlash - dt);
-    if (!e.alive) {
-      if (S.depth[i] > 0) { e.refill -= dt; if (e.refill <= 0) { Object.assign(e, newEnemy()); S.depth[i]--; } }
-      continue;
-    }
-    e.st -= dt;
-    if (e.st > 0) continue;
-    if (e.state === 'guard') { e.state = 'windup'; e.st = E.windup * rand(0.85, 1.15); }
-    else if (e.state === 'windup') { e.state = 'strike'; e.st = E.strike; enemyStrike(i); }
-    else if (e.state === 'strike') { e.state = 'recover'; e.st = E.recover * rand(0.85, 1.15); }
-    else { e.state = 'guard'; e.st = rand(E.guardMin, E.guardMax); }
-  }
-
-  // 敵の増援（だんだん速く）
-  S.spawnTimer -= dt;
-  if (S.spawnTimer <= 0) {
-    S.spawnInt = Math.max(CFG.spawnMin, S.spawnInt - CFG.spawnRamp * S.spawnInt * 3);
-    S.spawnTimer = S.spawnInt;
-    const i = Math.floor(Math.random() * CFG.cols);
-    if (S.depth[i] < CFG.enemyMaxDepth) S.depth[i]++;
-  }
-
-  // 押し合い：敵の数が多いほど後ろへ押される
-  const total = enemyTotal();
-  S.line += Math.max(-4, (total * CFG.pushPerEnemy - CFG.pushBase)) * dt;
-
-  // 勝敗
-  if (S.line <= CFG.lineWin || total === 0) end('win');
-  else if (S.line >= CFG.lineLose) end('lose', '押し切られた');
-  else if (S.reserves === 0 && S.ours.every(o => !o.alive)) end('lose', '隊が尽きた');
+function enemyFrame(e) {
+  if (e.state === 'windup') return { a: 'windup', dx: 8, cue: 'red' };
+  if (e.state === 'strike') return { a: 'strike', dx: -22, blur: 'windup', cue: 'red' };
+  if (e.state === 'recover') return { a: 'recover', dx: -10, cue: 'gold' };
+  return { a: 'guard', dx: 0, breathe: true };
 }
-function enemyTotal() { return S.enemies.filter(e => e.alive).length + S.depth.reduce((a, b) => a + b, 0); }
-function end(r, why) { S.phase = r; S.why = why; S.endT = S.t; }
 
 // ===== 描画 =====
-function draw() {
-  ctx.save();
-  if (S.shake > 0) ctx.translate(rand(-S.shake, S.shake), rand(-S.shake, S.shake));
-  // 地面
-  ctx.fillStyle = '#2a2419'; ctx.fillRect(-10, -10, W + 20, H + 20);
-  ctx.fillStyle = '#3a2618'; ctx.fillRect(-10, -10, W + 20, CFG.lineWin + 10); // 敵陣
-  ctx.fillStyle = '#1b2430'; ctx.fillRect(-10, CFG.lineLose, W + 20, H);      // 自陣の背後
-  ctx.strokeStyle = '#ffffff22'; ctx.setLineDash([6, 8]);
-  line(0, CFG.lineWin, W, CFG.lineWin); line(0, CFG.lineLose, W, CFG.lineLose); ctx.setLineDash([]);
-  ctx.fillStyle = '#ffffff44'; ctx.font = '12px sans-serif'; ctx.textAlign = 'left';
-  ctx.fillText('敵陣（ここまで押せば勝ち）', 12, CFG.lineWin - 8);
-  ctx.fillText('後がない（ここまで押されたら負け）', 12, CFG.lineLose + 16);
+// 「描いた順に重なる」2Dの描き方を、使い回すスプライトの列で再現する。
+// 毎フレーム先頭から順に絵を差し替え、使わなかった残りは隠す
+const spriteLayer = new PIXI.Container();
+const pool = [];
+let poolUsed = 0;
+function put(tex, x, y, w, h, alpha = 1, tint = 0xffffff) {
+  let sp = pool[poolUsed];
+  if (!sp) { sp = new PIXI.Sprite(); pool.push(sp); spriteLayer.addChild(sp); }
+  poolUsed++;
+  sp.texture = tex; sp.visible = true;
+  sp.x = x; sp.y = y; sp.width = w; sp.height = h;
+  sp.alpha = alpha; sp.tint = tint;
+}
+function beginSprites() { poolUsed = 0; }
+function endSprites() { for (let i = poolUsed; i < pool.length; i++) pool[i].visible = false; }
+const canvasTex = c => PIXI.Texture.from(c);
+function drawFrame(sprite, name, x, y, unit, alpha = 1) {
+  const { meta, tex } = SPRITES[sprite];
+  const f = meta.frames[name];
+  const k = unit * BODY_PX / meta.height;
+  put(tex[name], x - f.anchor * k, y - f.baseline * k, f.w * k, f.h * k, alpha);
+}
+// 足元の影（だ円）
+const SHADOW_TEX = (() => {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 32;
+  const g = c.getContext('2d'); g.fillStyle = 'rgb(30,18,8)';
+  g.beginPath(); g.ellipse(64, 16, 62, 14, 0, 0, Math.PI * 2); g.fill();
+  return canvasTex(c);
+})();
+function shadow(x, y, unit, w, a = 0.35) {
+  put(SHADOW_TEX, x - w * unit, y - 2 * unit - 18 * unit, w * 2 * unit, 36 * unit, a);
+}
+// 足元の合図の光は、先に1枚ずつ作っておいて使い回す
+const CUE_IMG = {};
+for (const [name, c] of [['red', '255,70,50'], ['gold', '255,215,110']]) {
+  const cv2 = document.createElement('canvas'); cv2.width = 128; cv2.height = 64;
+  const g = cv2.getContext('2d'), r = g.createRadialGradient(64, 32, 0, 64, 32, 64);
+  r.addColorStop(0, `rgba(${c},0.8)`); r.addColorStop(1, `rgba(${c},0)`);
+  g.setTransform(1, 0, 0, 0.5, 0, 16); g.fillStyle = r; g.fillRect(0, 0, 128, 64);
+  CUE_IMG[name] = canvasTex(cv2);
+}
+function cue(x, y, unit, color) {
+  put(CUE_IMG[color], x - 95 * unit, y - 26 * unit, 190 * unit, 52 * unit);
+}
+function drawUnit(side, file, rank, fr, now) {
+  const ally = side === 'ally';
+  const sprite = ally ? 'hoplite' : 'persian';
+  const p = project(file, slotX(side, rank), rank * 16);
+  const en = rank === 0 ? enter[side][file] : 0;
+  const x = p.x + (fr.dx + (ally ? -1 : 1) * RANK_GAP * ease(en)) * p.unit;
+  if (x < -420 * p.unit || x > W + 420 * p.unit) return; // 画面の外は描かない
+  const breathe = fr.breathe ? Math.sin(now * 2.2 + file * 1.7 + rank) * 1.5 * p.unit : 0;
+  shadow(x + (ally ? 50 : -50) * p.unit, p.y, p.unit, 100);
+  if (fr.cue) cue(x - 50 * p.unit, p.y, p.unit, fr.cue);
+  if (fr.blur) drawFrame(sprite, fr.blur, x + (ally ? -12 : 12) * p.unit, p.y, p.unit, 0.35);
+  if (fr.ghost) drawFrame(sprite, fr.ghost, x, p.y, p.unit, 0.4 * clamp01(fr.ghostA));
+  drawFrame(sprite, fr.a, x, p.y + breathe, p.unit);
+}
 
-  for (const c of S.corpses) {
-    ctx.globalAlpha = Math.min(1, c.life / 2) * 0.5;
-    ctx.fillStyle = c.side ? '#5a2a2a' : '#6a5030';
-    ctx.beginPath(); ctx.ellipse(c.x, c.y, 11, 6, 0.4, 0, 7); ctx.fill();
-  }
-  ctx.globalAlpha = 1;
+// 背景
+const hills = Array.from({ length: 9 }, (_, i) => ({ x: i / 8, h: rand(0.05, 0.12), w: rand(0.15, 0.3) }));
+// 重い塗り（全画面のグラデーション）は、画面サイズが変わったときだけ別のキャンバスに描いておく
+function layer(draw) {
+  const c = document.createElement('canvas'), dpr = DPR;
+  c.width = Math.max(1, W * dpr); c.height = Math.max(1, H * dpr);
+  const g = c.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); draw(g);
+  return c;
+}
+let layers = { key: '' };
+function getLayers() {
+  const key = W + 'x' + H;
+  if (layers.key === key) return layers;
+  const { vp } = view(), top = Math.ceil(vp.y);
+  layers = {
+    key,
+    sky: layer(g => {
+      const sky = g.createLinearGradient(0, 0, 0, H * 0.45);
+      sky.addColorStop(0, '#6f8fb6'); sky.addColorStop(1, '#e2cfa6');
+      g.fillStyle = sky; g.fillRect(0, 0, W, top + 2);
+      const sun = g.createRadialGradient(W * 0.85, H * 0.28, 0, W * 0.85, H * 0.28, W * 0.5);
+      sun.addColorStop(0, 'rgba(255,225,160,0.9)'); sun.addColorStop(1, 'rgba(255,225,160,0)');
+      g.fillStyle = sun; g.fillRect(0, 0, W, top + 2);
+      g.fillStyle = '#9b8f6b';
+      for (const h of hills) { g.beginPath(); g.ellipse(h.x * W, H * 0.44, h.w * W, h.h * H, 0, Math.PI, 0); g.fill(); }
+    }),
+    // 地面の上に重ねる光：奥は砂ぼこりでかすみ、手前は影で少し暗い
+    groundLight: layer(g => {
+      const hz = g.createLinearGradient(0, top, 0, H);
+      hz.addColorStop(0, 'rgba(222,200,160,1)'); hz.addColorStop(0.4, 'rgba(222,200,160,0)');
+      hz.addColorStop(0.6, 'rgba(60,35,15,0)'); hz.addColorStop(1, 'rgba(60,35,15,0.35)');
+      g.fillStyle = hz; g.fillRect(0, top, W, H - top);
+    }),
+  };
+  return layers;
+}
+// 地面：真上から見たテクスチャを、画面の点ごとに奥行きを計算して貼る（GPUのシェーダーで）
+const TILE = 760;      // テクスチャ1枚ぶんの大きさ（ワールドpx）
+const DEPTH_PX = 260;  // 奥行きの縮み具合
+const groundTexture = PIXI.Texture.from('assets/textures/rocky_terrain_02_dry.jpg', {
+  wrapMode: PIXI.WRAP_MODES.REPEAT, mipmap: PIXI.MIPMAP_MODES.ON });
+const groundShader = PIXI.Shader.from(`
+  precision highp float;
+  attribute vec2 aVertexPosition;
+  uniform mat3 translationMatrix; uniform mat3 projectionMatrix;
+  uniform vec2 uSize;
+  varying vec2 vPos;
+  void main() {
+    vec2 p = aVertexPosition * uSize; vPos = p;
+    gl_Position = vec4((projectionMatrix * translationMatrix * vec3(p, 1.0)).xy, 0.0, 1.0);
+  }`, `
+  precision highp float;
+  varying vec2 vPos;
+  uniform sampler2D uTex;
+  uniform vec2 uVp; uniform vec2 uNear;
+  uniform float uBase; uniform float uCam; uniform float uTile; uniform float uDepth;
+  void main() {
+    float sc = (vPos.y - uVp.y) / (uNear.y - uVp.y);
+    if (sc <= 0.004) discard;
+    float k = uBase * sc;                                   // 画面px / ワールドpx
+    float cx = uVp.x + (uNear.x - uVp.x) * sc - uCam * k;   // ワールドx=0 の画面位置
+    vec2 uv = vec2((vPos.x - cx) / k, uDepth / sc) / uTile;
+    gl_FragColor = texture2D(uTex, uv);
+  }`, { uTex: groundTexture, uSize: [1, 1], uVp: [0, 0], uNear: [0, 0], uBase: 1, uCam: 0, uTile: TILE, uDepth: DEPTH_PX });
+const groundGeom = new PIXI.Geometry()
+  .addAttribute('aVertexPosition', [0, 0, 1, 0, 1, 1, 0, 1], 2)
+  .addIndex([0, 1, 2, 0, 2, 3]);
+const groundMesh = new PIXI.Mesh(groundGeom, groundShader);
+const skySprite = new PIXI.Sprite(), lightSprite = new PIXI.Sprite();
+const lines = new PIXI.Graphics();
+world.addChild(skySprite, groundMesh, lightSprite, lines, spriteLayer);
+let layersKey = '';
 
-  const ey = enY(), oy = ourY();
-  // 敵の後列
-  for (let i = 0; i < CFG.cols; i++) for (let k = 0; k < S.depth[i]; k++) {
-    const y = ey - CFG.rankGap * (k + 1);
-    if (y < -20) break;
-    body(colX(i), y, '#6b2f3a', '#3d1a22', 1, 0.75);
-  }
-  // 自軍の予備（後列）
-  const perRow = CFG.cols;
-  const rows = Math.ceil(S.reserves / perRow);
-  for (let r = 0; r < rows; r++) for (let i = 0; i < perRow; i++) {
-    if (r * perRow + i >= S.reserves) break;
-    const y = oy + CFG.rankGap * (r + 1);
-    if (y > H + 20) break;
-    body(colX(i), y, '#a07a3c', '#5d4520', -1, 0.75);
-  }
-
-  // 前列：敵
-  for (let i = 0; i < CFG.cols; i++) {
-    const e = S.enemies[i]; if (!e.alive) continue;
-    drawEnemy(colX(i), ey, e);
-  }
-  // 前列：自軍
-  const tt = S.thrustT;
-  const ext = tt < 0 ? 0 : tt < CFG.thrustHitAt ? tt / CFG.thrustHitAt : Math.max(0, 1 - (tt - CFG.thrustHitAt) / (CFG.thrustEnd - CFG.thrustHitAt));
-  for (let i = 0; i < CFG.cols; i++) {
-    const o = S.ours[i];
-    if (!o.alive) {
-      if (S.reserves > 0) { ctx.globalAlpha = 0.35; body(colX(i), oy + CFG.rankGap * (1 - Math.max(0, o.refill) / CFG.ourRefill) * -0 + 8, '#a07a3c', '#5d4520', -1, 0.9); ctx.globalAlpha = 1; }
-      continue;
+function background() {
+  const L = getLayers();
+  if (layersKey !== L.key) {
+    layersKey = L.key;
+    for (const [sp, c] of [[skySprite, L.sky], [lightSprite, L.groundLight]]) {
+      const old = sp.texture; sp.texture = canvasTex(c);
+      if (old && old !== PIXI.Texture.EMPTY) old.destroy(true);
+      sp.width = W; sp.height = H;
     }
-    drawOurs(colX(i), oy, o, ext);
   }
+  const { near, vp, base } = view();
+  const u = groundShader.uniforms;
+  u.uSize = [W, H]; u.uVp = [vp.x, vp.y]; u.uNear = [near.x, near.y]; u.uBase = base; u.uCam = camX;
+  // 勝ち・負けの線（地面の目印）
+  lines.clear();
+  for (const [line, color] of [[CFG.lineWin, 0xaa281e], [CFG.lineLose, 0x28467f]]) {
+    const wx = -(line - CFG.lineStart) * LINE_PX + (line === CFG.lineWin ? GAP + RANK_GAP : -RANK_GAP * 1.5);
+    const a = project(0, wx), b = project(FILES + 6, wx);
+    lines.lineStyle(5, color, 0.55).moveTo(a.x, a.y).lineTo(b.x, b.y);
+  }
+}
 
-  for (const p of S.fx) { ctx.globalAlpha = Math.min(1, p.life * 3); ctx.fillStyle = p.color; ctx.fillRect(p.x - 2, p.y - 2, 4, 4); }
-  ctx.globalAlpha = 1;
-  ctx.textAlign = 'center';
-  for (const t of S.texts) { ctx.globalAlpha = Math.min(1, t.life * 2); ctx.fillStyle = t.color; ctx.font = `bold ${t.size}px sans-serif`; ctx.fillText(t.s, t.x, t.y); }
-  ctx.globalAlpha = 1;
-  ctx.restore();
+function draw(dt, now) {
+  const S = game.S;
+  background();
+  beginSprites();
+  for (let f = FILES - 1; f >= 0; f--) {
+    for (const c of corpses) if (c.file === f) {
+      const p = project(f, c.wx), a = clamp01((7 - c.t) / 1.5);
+      const sprite = c.side === 'ally' ? 'hoplite' : 'persian';
+      shadow(p.x, p.y, p.unit, 160, 0.3 * a);
+      drawFrame(sprite, 'fallen', p.x, p.y + 6 * p.unit, p.unit, a);
+    }
+    for (let r = SHOW_RANKS - 1; r >= 1; r--) {
+      if (r <= S.depth[f]) drawUnit('enemy', f, r, { a: 'guard', dx: 0, breathe: true }, now);
+      if ((r - 1) * FILES + f < S.reserves) drawUnit('ally', f, r, { a: 'guard', dx: 0, breathe: true }, now);
+    }
+    for (const d of dying) if (d.file === f) {
+      const p = project(f, d.wx);
+      const ally = d.side === 'ally', sprite = ally ? 'hoplite' : 'persian';
+      const dx = (ally ? -18 : 18) * ease(clamp01(d.t / 0.16)) * p.unit;
+      shadow(p.x + dx, p.y, p.unit, 100);
+      drawFrame(sprite, d.t < 0.16 ? 'hit' : 'collapse', p.x + dx, p.y, p.unit);
+    }
+    if (S.enemies[f].alive) drawUnit('enemy', f, 0, enemyFrame(S.enemies[f]), now);
+    if (S.ours[f].alive) drawUnit('ally', f, 0, allyFrame(S), now);
+  }
+  for (const q of fx) {
+    const p = project(q.file, q.wx);
+    put(PIXI.Texture.WHITE, p.x + q.ox * p.unit - 2, p.y - (q.y - q.oy) * p.unit - 2, 4, 4, clamp01(q.life * 3), PIXI.utils.string2hex(q.color));
+  }
+  endSprites();
+}
 
-  hud();
-  if (S.phase === 'title') overlay('PHALANX', ['盾を並べて守れ。号令で一斉に突け。',
-    '', 'スペースキー（またはクリック）＝ 隊全体で突く', 'それ以外はずっと守り',
-    '', '赤く光る敵 ＝ 攻撃の構え（スキあり、でも来る）', '盾を下ろした敵 ＝ 戻り中（狙いどき）', '盾を構えた敵に突くと、弾かれて反撃されることがある',
-    '突いている間は無防備。守ってばかりだと敵が増えて押される。', '', 'スペースで開始']);
-  if (S.phase === 'win') overlay('勝利', [`敵陣まで押し切った（${S.endT.toFixed(1)}秒）`, `倒した敵 ${S.kills}　失った味方 ${S.lost}　突撃 ${S.thrusts}回`, '', 'スペースでもう一度']);
-  if (S.phase === 'lose') overlay('敗北', [S.why, `倒した敵 ${S.kills}　失った味方 ${S.lost}　突撃 ${S.thrusts}回`, '', 'スペースでもう一度']);
+function updateFx(dt) {
+  const S = game.S;
+  shift += (-(S.line - CFG.lineStart) * LINE_PX - shift) * Math.min(1, dt * 5);
+  camX = shift * CAM_FOLLOW;
+  for (const side of ['ally', 'enemy']) for (let i = 0; i < FILES; i++) enter[side][i] = Math.max(0, enter[side][i] - dt * 2.5);
+  for (let i = dying.length - 1; i >= 0; i--) {
+    const d = dying[i]; d.t += dt;
+    if (d.t > 0.5) { corpses.push({ side: d.side, file: d.file, wx: d.wx + (d.side === 'ally' ? -18 : 18), t: 0 }); dying.splice(i, 1); }
+  }
+  for (let i = corpses.length - 1; i >= 0; i--) if ((corpses[i].t += dt) > 7) corpses.splice(i, 1);
+  for (let i = fx.length - 1; i >= 0; i--) {
+    const q = fx[i];
+    if (q.ox === undefined) { q.ox = 0; q.oy = 0; }
+    q.ox += q.vx * dt; q.oy += q.vy * dt; q.vy += 500 * dt;
+    if ((q.life -= dt) <= 0) fx.splice(i, 1);
+  }
+  for (let i = texts.length - 1; i >= 0; i--) { texts[i].y += 40 * dt; if ((texts[i].life -= dt) <= 0) texts.splice(i, 1); }
+  shake = Math.max(0, shake - dt * 30);
 }
-function line(a, b, c, d) { ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(c, d); ctx.stroke(); }
-// dir: 1=下向き（敵）, -1=上向き（自軍）
-function body(x, y, c1, c2, dir, s = 1) {
-  ctx.fillStyle = c2; ctx.beginPath(); ctx.arc(x, y, 13 * s, 0, 7); ctx.fill();
-  ctx.fillStyle = c1; ctx.beginPath(); ctx.arc(x, y + dir * 4 * s, 10 * s, 0, 7); ctx.fill();
+
+// ===== タイトルのスライドショー =====
+// 両軍の整列の絵。7秒ごとに、横に流しながらフェードで切り替える
+const TITLE_IMAGES = ['assets/screens/title_1.jpg', 'assets/screens/title_2.jpg', 'assets/screens/title_3.jpg'];
+let slideTimer = null, slideIndex = -1;
+function nextSlide() {
+  const slides = document.querySelectorAll('#slides div');
+  if (!slides.length) return;
+  const prev = slides[slideIndex];
+  slideIndex = (slideIndex + 1) % slides.length;
+  const cur = slides[slideIndex];
+  cur.classList.remove('pan-l', 'pan-r');
+  void cur.offsetWidth; // アニメーションを最初からやり直す
+  cur.classList.add('show', slideIndex % 2 ? 'pan-r' : 'pan-l');
+  if (prev && prev !== cur) prev.classList.remove('show');
 }
-function shield(x, y, dir, color, open) {
-  // 盾は左手：自軍は画面左寄り（左隣を覆う）、敵は向かい合うので画面右寄り
-  const off = dir < 0 ? -12 : 12;
-  ctx.fillStyle = color; ctx.strokeStyle = '#00000066'; ctx.lineWidth = 2;
-  ctx.beginPath();
-  if (open) ctx.ellipse(x + off * 1.6, y + dir * 2, 7, 15, 0, 0, 7);
-  else ctx.ellipse(x + off * 0.6, y + dir * 12, 26, 9, 0, 0, 7);
-  ctx.fill(); ctx.stroke();
+function startSlides() { stopSlides(); slideIndex = -1; nextSlide(); slideTimer = setInterval(nextSlide, 7000); }
+function stopSlides() { clearInterval(slideTimer); slideTimer = null; }
+
+// ===== ギリシャ数字（イオニア式：Αʹ=1, Ιʹ=10, Ρʹ=100） =====
+const G_ONES = ['', 'Α', 'Β', 'Γ', 'Δ', 'Ε', 'Ϛ', 'Ζ', 'Η', 'Θ'];
+const G_TENS = ['', 'Ι', 'Κ', 'Λ', 'Μ', 'Ν', 'Ξ', 'Ο', 'Π', 'Ϟ'];
+const G_HUNDREDS = ['', 'Ρ', 'Σ', 'Τ', 'Υ', 'Φ', 'Χ', 'Ψ', 'Ω', 'Ϡ'];
+function greek(n) {
+  n = Math.max(0, Math.floor(n));
+  if (n === 0) return '—'; // ギリシャ数字には0がない
+  const th = Math.floor(n / 1000) % 10;
+  return (th ? '͵' + G_ONES[th] : '') + G_HUNDREDS[Math.floor(n / 100) % 10] + G_TENS[Math.floor(n / 10) % 10] + G_ONES[n % 10] + 'ʹ';
 }
-function spear(x, y, dir, len) {
-  ctx.strokeStyle = '#c9b38a'; ctx.lineWidth = 3;
-  const sx = x + (dir < 0 ? 10 : -10);
-  line(sx, y - dir * 6, sx, y + dir * len);
-  ctx.fillStyle = '#e0e0e0'; ctx.beginPath();
-  ctx.moveTo(sx, y + dir * (len + 9)); ctx.lineTo(sx - 4, y + dir * len); ctx.lineTo(sx + 4, y + dir * len); ctx.fill();
+
+// ===== HUD・オーバーレイ =====
+const $ = id => document.getElementById(id);
+function showOverlay() {
+  const S = game.S, ov = $('overlay');
+  ov.classList.remove('end', 'win', 'lose', 'title', 'gate');
+  stopSlides();
+  if (S.phase === 'play') { ov.classList.add('hidden'); return; }
+  ov.classList.remove('hidden');
+  if (S.phase === 'title' && !entered) {
+    // 入口：暗い画面に名前だけ。ここで一度押してもらうと、音が使えるようになる
+    ov.classList.add('title', 'gate');
+    ov.innerHTML = `<h1>PHALANX</h1><p class="start">⟡</p><p class="key">SPACE · TAP</p>`;
+  } else if (S.phase === 'title') {
+    ov.classList.add('title');
+    ov.innerHTML = `<div id="slides">${TITLE_IMAGES.map(src => `<div style="background-image:url(${src})"></div>`).join('')}</div>
+      <h1>PHALANX</h1>
+      <p class="start">ΑΡΧΗ</p>
+      <p class="key">SPACE · TAP</p>`;
+    startSlides();
+  } else {
+    const win = S.phase === 'win';
+    ov.classList.add('end', win ? 'win' : 'lose');
+    ov.innerHTML = `<div class="bg"></div><h1>${win ? 'ΝΙΚΗ' : 'ΗΤΤΑ'}</h1>
+      <p class="stats"><i class="ico spara"></i><b>${greek(S.kills)}</b>　<i class="ico aspis"></i><b>${greek(S.lost)}</b></p>
+      <p class="again">↻</p>`;
+  }
 }
-function drawOurs(x, y, o, ext) {
-  spear(x, y, -1, 22 + ext * 34);
-  body(x, y, '#c89a4a', '#6b4f22', -1);
-  shield(x, y - ext * 0, -1, o.hitFlash > 0 ? '#fff0b0' : '#b8862e', ext > 0.05);
-}
-function drawEnemy(x, y, e) {
-  let len = 18, open = false, glow = 0;
-  if (e.state === 'windup') { len = 8; open = true; glow = 1; }
-  if (e.state === 'strike') { len = 52; open = true; glow = 1; }
-  if (e.state === 'recover') { len = 14; open = true; }
-  if (glow) { ctx.fillStyle = '#ff3b3b55'; ctx.beginPath(); ctx.arc(x, y, 22, 0, 7); ctx.fill(); }
-  spear(x, y, 1, len);
-  body(x, y, '#8c3b4a', '#4a1f28', 1);
-  shield(x, y, 1, '#5b6470', open);
-}
-function hud() {
-  ctx.fillStyle = '#000000aa'; ctx.fillRect(0, 0, W, 34);
-  ctx.font = '15px sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = '#eadfc8';
-  const alive = S.ours.filter(o => o.alive).length;
-  ctx.fillText(`味方 前列${alive}  予備${S.reserves}`, 14, 22);
-  ctx.textAlign = 'right';
-  ctx.fillText(`敵 ${enemyTotal()}`, W - 14, 22);
-  // 押し合いゲージ
-  const gx = 300, gw = 360, p = (S.lineVis - CFG.lineWin) / (CFG.lineLose - CFG.lineWin);
-  ctx.fillStyle = '#ffffff22'; ctx.fillRect(gx, 12, gw, 10);
-  ctx.fillStyle = p < 0.5 ? '#d9a441' : p < 0.8 ? '#e07b39' : '#e04848';
-  ctx.fillRect(gx, 12, gw * (1 - p), 10);
-  ctx.textAlign = 'center'; ctx.fillStyle = '#eadfc8'; ctx.font = '11px sans-serif';
-  ctx.fillText(S.thrustT >= 0 ? '― 突撃中（無防備）―' : '盾', W / 2, 32 + 0);
-}
-function overlay(title, lines) {
-  ctx.fillStyle = '#000000cc'; ctx.fillRect(0, 0, W, H);
-  ctx.textAlign = 'center'; ctx.fillStyle = '#d9a441'; ctx.font = 'bold 48px serif';
-  ctx.fillText(title, W / 2, 150);
-  ctx.fillStyle = '#eadfc8'; ctx.font = '17px sans-serif';
-  lines.forEach((l, k) => ctx.fillText(l, W / 2, 210 + k * 28));
+function updateHud() {
+  const S = game.S;
+  $('ally').textContent = greek(S.ours.filter(o => o.alive).length + S.reserves);
+  $('foe').textContent = greek(game.enemyTotal());
+  const p = (S.line - CFG.lineWin) / (CFG.lineLose - CFG.lineWin);
+  $('gaugeFill').style.width = (100 * (1 - p)).toFixed(1) + '%';
+  $('gaugeFill').style.background = p < 0.5 ? '#e0b25a' : p < 0.8 ? '#e07b39' : '#e04848';
+  // 列ごとの敵の合図（赤＝構え・攻撃、金＝戻り、空＝敵がいない）。左が手前
+  const pips = $('pips');
+  if (!pips.childElementCount) {
+    pips.innerHTML = Array.from({ length: FILES }, () => '<i></i>').join('');
+  }
+  const dots = pips.querySelectorAll('i');
+  S.enemies.forEach((e, i) => {
+    dots[i].className = !e.alive ? 'gap' : e.state === 'windup' || e.state === 'strike' ? 'red' : e.state === 'recover' ? 'gold' : '';
+  });
+  pips.classList.toggle('hidden', S.phase !== 'play');
+  $('hud').classList.toggle('hidden', S.phase !== 'play');
 }
 
 // ===== ループ =====
-reset();
 let last = performance.now();
 function loop(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  update(dt); draw();
+  sfxBudget = 3;
+  game.update(dt);
+  updateFx(dt);
+  world.x = shake > 0 ? rand(-shake, shake) : 0;
+  world.y = shake > 0 ? rand(-shake, shake) : 0;
+  draw(dt, now / 1000);
+  renderer.render(stage);
+  updateHud();
   requestAnimationFrame(loop);
 }
-requestAnimationFrame(loop);
+// 勝敗の絵は先に読み込んでおく（終わった瞬間に出せるように）
+for (const n of ['victory', 'defeat']) new Image().src = `assets/screens/${n}.jpg`;
+Promise.all(Object.keys(SPRITES).map(loadSprite))
+  .then(() => { showOverlay(); requestAnimationFrame(loop); })
+  .catch(err => {
+    const ov = document.getElementById('overlay'); ov.classList.remove('hidden');
+    ov.textContent = '素材を読み込めませんでした。ローカルサーバー経由で開いてください。 ' + err;
+  });
 </script>
 </body>
 </html>
