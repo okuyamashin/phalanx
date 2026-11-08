@@ -3,8 +3,8 @@
 // つながったあとは端末どうしで直接やりとりする。
 //
 // メッセージ（JSON）
-//   スマホ → ホスト : {t:'hello', v}  {t:'thrust', seq}  {t:'ping', t0}
-//   ホスト → スマホ : {t:'pong', t0}  {t:'state', ...}
+//   スマホ → ホスト : {t:'hello', v}  {t:'thrust', seq}  {t:'ping', t0, rtt}
+//   ホスト → スマホ : {t:'pong', t0}  {t:'state', phase}（phase = gate / title / play / win / lose）
 
 export const PROTOCOL = 1;
 const PREFIX = 'phalanx-';
@@ -18,9 +18,20 @@ function randomId(n = 8) {
 // ===== ホスト（ゲーム画面）=====
 // onThrust() : スマホのボタンが押された
 // onStatus(s): 'connecting' | 'waiting'（QR待ち）| 'linked' | 'error'
-export function hostLink({ onThrust = () => {}, onStatus = () => {} } = {}) {
-  let peer = null, conn = null, lastSeq = -1;
-  const api = { id: null, padUrl: null, linked: false, send };
+// onRtt(ms)  : スマホが測った往復の時間（2秒ごと）
+export function hostLink({ onThrust = () => {}, onStatus = () => {}, onRtt = () => {} } = {}) {
+  let peer = null, conn = null, lastSeq = -1, lastSeen = 0;
+  const api = { id: null, padUrl: null, linked: false, rtt: null, send };
+
+  // スマホのタブが閉じられたりスリープしたりしても、close が届かないことがある。
+  // スマホは2秒ごとに ping を送るので、5秒なにも来なければ切れたとみなす
+  const TIMEOUT = 5000;
+  function drop(c) {
+    if (conn !== c) return;
+    conn = null; api.linked = false; api.rtt = null; onStatus('waiting');
+    try { c.close(); } catch {}
+  }
+  setInterval(() => { if (conn && performance.now() - lastSeen > TIMEOUT) drop(conn); }, 1000);
 
   function send(msg) { if (conn && conn.open) conn.send(msg); }
 
@@ -36,9 +47,10 @@ export function hostLink({ onThrust = () => {}, onStatus = () => {} } = {}) {
     peer.on('connection', c => {
       // つなげるのは1台だけ。新しいスマホが来たら古いほうを切る
       if (conn) conn.close();
-      conn = c; lastSeq = -1;
+      conn = c; lastSeq = -1; lastSeen = performance.now();
       c.on('data', msg => {
         if (!msg || typeof msg !== 'object') return;
+        if (c === conn) lastSeen = performance.now();
         if (msg.t === 'hello') {
           if (msg.v !== PROTOCOL) { c.close(); return; }
           api.linked = true; onStatus('linked');
@@ -47,13 +59,11 @@ export function hostLink({ onThrust = () => {}, onStatus = () => {} } = {}) {
           lastSeq = msg.seq; onThrust();
         } else if (msg.t === 'ping') {
           c.send({ t: 'pong', t0: msg.t0 });
+          if (typeof msg.rtt === 'number') { api.rtt = msg.rtt; onRtt(msg.rtt); }
         }
         // 知らない種類は捨てる
       });
-      c.on('close', () => {
-        if (conn !== c) return;
-        conn = null; api.linked = false; onStatus('waiting');
-      });
+      c.on('close', () => drop(c));
     });
     peer.on('error', err => {
       // 再読み込み直後は前の ID がまだサーバーに残っていることがある。そのときは新しい ID で
@@ -98,7 +108,7 @@ export function padLink(hostId, { onStatus = () => {}, onMessage = () => {} } = 
   let pingTimer = 0;
   function ping() {
     clearTimeout(pingTimer);
-    if (conn && conn.open) conn.send({ t: 'ping', t0: performance.now() });
+    if (conn && conn.open) conn.send({ t: 'ping', t0: performance.now(), rtt: api.rtt });
     pingTimer = setTimeout(ping, 2000);
   }
   function thrust() {

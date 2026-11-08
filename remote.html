@@ -101,12 +101,20 @@
   #pips i.gap { background:transparent; box-shadow:0 0 0 1px #ffffff40 inset; }
   #pips i.us { width:4px; border-radius:2px; height:12px; }
   #pips span { font-size:11px; color:#f2e8d2aa; margin:0 4px; }
-  /* スマホとのつながり（段階1：仮の表示。段階2で QR に置き換える） */
-  #link { position:fixed; right:14px; bottom:12px; font-size:12px; color:#f2e8d2aa; text-shadow:0 1px 2px #000;
-    pointer-events:auto; font-family: ui-monospace, Menlo, monospace; z-index:20; }
-  #link a { color:var(--gold); }
-  #link .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#777; margin-right:6px; }
-  #link.linked .dot { background:#6fd06f; } #link.error .dot { background:#e04848; }
+  /* スマホとのつながり。つながる前は QR、つながったら小さな印だけ */
+  #link { position:fixed; right:16px; bottom:14px; z-index:20; pointer-events:auto; color:#f2e8d2aa;
+    font-family: ui-monospace, Menlo, monospace; font-size:12px; text-shadow:0 1px 2px #000; }
+  #link .qr { display:none; flex-direction:column; align-items:center; gap:6px; }
+  #link .qr a { display:block; line-height:0; padding:6px; background:#f2e8d2; border-radius:6px;
+    box-shadow:0 2px 10px #0008; opacity:.82; transition:opacity .2s; }
+  #link .qr a:hover { opacity:1; }
+  #link .qr svg { width:104px; height:104px; }
+  #link .qr span { letter-spacing:.12em; }
+  #link .mark { display:none; align-items:center; gap:6px; }
+  #link .dot { width:8px; height:8px; border-radius:50%; background:#6fd06f; box-shadow:0 0 6px currentColor; }
+  #link.slow .dot { background:#e0b25a; } #link.lag .dot { background:#e04848; }
+  #link.showqr .qr, #link.showmark .mark { display:flex; }
+  #link.inplay { top:46px; bottom:auto; }
 </style>
 </head>
 <body>
@@ -120,7 +128,7 @@
 </div>
 <div id="pips"></div>
 <div id="overlay"></div>
-<div id="link"><span class="dot"></span><span class="txt">…</span></div>
+<div id="link"><div class="qr"><a target="_blank" rel="noopener"></a><span></span></div><div class="mark"><i class="dot"></i><span></span></div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/pixi.js@7.4.2/dist/pixi.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script>
@@ -129,6 +137,7 @@
 // 描画は PixiJS（WebGL）。大量の兵の絵をまとめてGPUに描かせる
 import { CFG, createGame } from './src/game.js';
 import { hostLink } from './src/link.js';
+import qrcode from 'https://cdn.jsdelivr.net/npm/qrcode-generator@2.0.4/dist/qrcode.mjs';
 
 const PIXI = window.PIXI;
 const cv = document.getElementById('c');
@@ -467,16 +476,42 @@ addEventListener('pointerdown', e => { if (e.target.closest('#link')) return; e.
 // スマホのボタンはスペースキーと同じ。ただし入口の画面では受け付けない
 // （ブラウザはこの画面で一度クリックかキー操作があるまで音を出させないため）
 const linkEl = document.getElementById('link');
-const link = hostLink({
+let linkStatus = 'connecting', sentPhase = null;
+let link = null; // hostLink は作る途中で onStatus を呼ぶので、先に宣言しておく
+link = hostLink({
   onThrust: () => { if (entered) doThrust(); },
-  onStatus: s => {
-    linkEl.className = s;
-    const txt = linkEl.querySelector('.txt');
-    if (s === 'linked') txt.textContent = 'linked';
-    else if (s === 'waiting') txt.innerHTML = `<a href="${link.padUrl}" target="_blank" rel="noopener">${link.id}</a>`;
-    else txt.textContent = s === 'error' ? '✕' : '…';
+  onStatus: st => {
+    linkStatus = st;
+    if (st === 'waiting') drawQr(link.padUrl, link.id);
+    refreshLink();
   },
+  onRtt: () => refreshLink(),
 });
+// QR は自前で SVG にする（色を画面になじませるため。読み取りやすさのため明暗ははっきり）
+function drawQr(url, id) {
+  const q = qrcode(0, 'M'); q.addData(url); q.make();
+  const n = q.getModuleCount(); let d = '';
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (q.isDark(y, x)) d += `M${x} ${y}h1v1h-1z`;
+  const a = linkEl.querySelector('.qr a');
+  a.href = url;
+  a.innerHTML = `<svg viewBox="0 0 ${n} ${n}" shape-rendering="crispEdges"><path d="${d}" fill="#1a140e"/></svg>`;
+  linkEl.querySelector('.qr span').textContent = id;
+}
+// 場面が変わるたび（showOverlay から）と、つながり・遅れが変わったときに呼ぶ
+function phaseKey() { const p = game.S.phase; return p === 'title' && !entered ? 'gate' : p; }
+function refreshLink() {
+  const phase = phaseKey(), play = phase === 'play', linked = linkStatus === 'linked';
+  const rtt = link ? link.rtt : null;
+  linkEl.className = [
+    !linked && linkStatus === 'waiting' && !play ? 'showqr' : '',
+    linked ? 'showmark' : '',
+    play ? 'inplay' : '',
+    rtt == null ? '' : rtt > 150 ? 'lag' : rtt > 60 ? 'slow' : '',
+  ].join(' ');
+  linkEl.querySelector('.mark span').textContent = linked && rtt != null ? Math.round(rtt) + ' ms' : '';
+  if (linked && link && phase !== sentPhase) { sentPhase = phase; link.send({ t: 'state', phase }); }
+  if (!linked) sentPhase = null;
+}
 window.phalanxLink = link;
 
 // ===== コマの選び方 =====
@@ -734,6 +769,7 @@ function greek(n) {
 // ===== HUD・オーバーレイ =====
 const $ = id => document.getElementById(id);
 function showOverlay() {
+  refreshLink();
   const S = game.S, ov = $('overlay');
   ov.classList.remove('end', 'win', 'lose', 'title', 'gate');
   stopSlides();

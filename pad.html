@@ -21,13 +21,17 @@
     font-family: Georgia, "Times New Roman", serif; font-size:min(16vw, 16vh); letter-spacing:.06em;
     display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 0 #e0b25a00;
     transition: transform .06s, box-shadow .2s, opacity .2s; }
-  body:not(.linked) #btn { opacity:.35; }
+  body:not(.linked) #btn, body.gate #btn { opacity:.35; }
+  #btn { flex-direction:column; }
+  #btn small { font-size:.32em; letter-spacing:.2em; opacity:.8; margin-bottom:.15em; }
+  #btn svg { width:68%; height:68%; }
+  body.win #btn small { color:#f0cf8a; } body.lose #btn small { color:#e07b6a; }
   #btn.hit { transform:scale(.94); box-shadow:0 0 40px 6px #e0b25a66; transition:none; }
 </style>
 </head>
 <body>
 <div id="status"><span class="dot"></span><span id="txt">…</span></div>
-<div id="btn">⟡</div>
+<div id="btn"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script>
 <script type="module">
@@ -36,8 +40,22 @@ import { padLink } from './src/link.js';
 const hostId = location.hash.slice(1).replace(/[^a-z0-9]/g, '');
 const txt = document.getElementById('txt'), btn = document.getElementById('btn');
 
+// ボタンの中身は場面で変える。入口ではパソコンを一度押してもらう必要があるので、薄く「⟡」だけ
+const SPEAR = '<svg viewBox="0 0 100 100"><path d="M10 50H74" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><path d="M70 50Q78 41 95 50Q78 59 70 50Z" fill="currentColor"/><path d="M5 50L9 46H20V54H9Z" fill="currentColor"/></svg>';
+const FACE = {
+  gate: '⟡',
+  title: 'ΑΡΧΗ',
+  play: SPEAR,
+  win: '<small>ΝΙΚΗ</small>↻',
+  lose: '<small>ΗΤΤΑ</small>↻',
+};
+let phase = 'gate', conn = 'connecting';
+function render() {
+  document.body.className = conn + (conn === 'linked' ? ' ' + phase : '');
+  btn.innerHTML = conn === 'linked' ? (FACE[phase] || '⟡') : '⟡';
+}
 function setStatus(s) {
-  document.body.className = s;
+  conn = s; render();
   txt.textContent = s === 'linked' ? (link.rtt == null ? 'linked' : Math.round(link.rtt) + ' ms') : s === 'connecting' ? '…' : '✕';
 }
 
@@ -45,12 +63,16 @@ let link = { rtt: null, thrust: () => false };
 if (!hostId) setStatus('error');
 else link = padLink(hostId, {
   onStatus: setStatus,
-  onMessage: msg => { if (msg.t === 'pong' && document.body.classList.contains('linked')) setStatus('linked'); },
+  onMessage: msg => {
+    if (msg.t === 'pong' && conn === 'linked') setStatus('linked');
+    else if (msg.t === 'state' && FACE[msg.phase]) { phase = msg.phase; render(); }
+  },
 });
 
 // 押した瞬間に送る（離したときではない）
 btn.addEventListener('pointerdown', e => {
   e.preventDefault();
+  if (phase === 'gate') return; // パソコン側で一度押すまでは効かない
   if (!link.thrust()) return;
   btn.classList.add('hit');
   if (navigator.vibrate) navigator.vibrate(15);
