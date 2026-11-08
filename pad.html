@@ -79,6 +79,18 @@ btn.addEventListener('pointerdown', e => {
   setTimeout(() => btn.classList.remove('hit'), 90);
 });
 addEventListener('contextmenu', e => e.preventDefault());
+
+// 画面が消えると接続が切れるので、つながっている間は画面をつけたままにする（対応している端末だけ）。
+// 画面に戻ってくると解除されているので、そのたびに頼み直す
+let wake = null;
+async function keepAwake() {
+  if (!('wakeLock' in navigator) || wake || document.visibilityState !== 'visible') return;
+  try { wake = await navigator.wakeLock.request('screen'); wake.addEventListener('release', () => { wake = null; }); }
+  catch { /* 電池残量が少ないときなどは断られる。そのままで問題ない */ }
+}
+keepAwake();
+document.addEventListener('visibilitychange', keepAwake);
+addEventListener('pointerdown', keepAwake);
 </script>
 </body>
 </html>

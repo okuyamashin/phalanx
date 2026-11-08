@@ -42,7 +42,8 @@ export function hostLink({ onThrust = () => {}, onStatus = () => {}, onRtt = () 
       try { sessionStorage.setItem('phalanx-host', id); } catch {}
       api.id = id;
       api.padUrl = new URL('pad.html#' + id, location.href).href;
-      onStatus('waiting');
+      retryWait = 1000;
+      if (!api.linked) onStatus('waiting'); // 中継につなぎ直しただけなら、スマホとのつながりはそのまま
     });
     peer.on('connection', c => {
       // つなげるのは1台だけ。新しいスマホが来たら古いほうを切る
@@ -70,11 +71,24 @@ export function hostLink({ onThrust = () => {}, onStatus = () => {}, onRtt = () 
       if (err.type === 'unavailable-id') { peer.destroy(); start(randomId()); return; }
       if (err.type === 'peer-unavailable') return; // スマホ側の問題。ホストは待ち続ける
       console.warn('[link]', err.type, err);
-      onStatus('error');
+      // 中継サーバーとのつながりが切れた。つながっているスマホとの直接のやりとりは続くので、
+      // 表示は変えずに裏でつなぎ直す。スマホがいないときだけ ✕ を出す
+      if (!api.linked) onStatus('error');
+      retrySignaling();
     });
-    peer.on('disconnected', () => { if (!peer.destroyed) peer.reconnect(); });
+    peer.on('disconnected', retrySignaling);
   }
 
+  let retryTimer = 0, retryWait = 1000;
+  function retrySignaling() {
+    if (retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = 0;
+      if (peer.destroyed) { start(api.id || randomId()); return; }
+      if (peer.disconnected) peer.reconnect();
+      retryWait = Math.min(retryWait * 2, 15000);
+    }, retryWait);
+  }
   let saved = null;
   try { saved = sessionStorage.getItem('phalanx-host'); } catch {}
   start(saved || randomId());
@@ -82,39 +96,107 @@ export function hostLink({ onThrust = () => {}, onStatus = () => {}, onRtt = () 
 }
 
 // ===== コントローラー（スマホ）=====
-// onStatus(s, info): 'connecting' | 'linked' | 'closed' | 'error'
-// onMessage(msg)   : ホストからのメッセージ
+// onStatus(s): 'connecting'（つなぎ中）| 'linked' | 'error'（10秒以上つながらない。裏でつなぎ直しは続ける）
+// onMessage(msg): ホストからのメッセージ
+//
+// 切れたら 1秒・2秒、そのあとは4秒ごとにつなぎ直す。画面に戻ってきたときはすぐつなぎ直す。
+// ホストは2秒ごとの ping に pong を返すので、5秒 pong が来なければ切れたとみなす
 export function padLink(hostId, { onStatus = () => {}, onMessage = () => {} } = {}) {
-  let conn = null, seq = 0;
+  const GIVE_UP = 10000, TIMEOUT = 5000;
+  let peer = null, conn = null, seq = 0, status = '';
+  let lastPong = 0, downSince = performance.now(), retryTimer = 0, retryWait = 1000;
   const api = { rtt: null, thrust, get open() { return !!(conn && conn.open); } };
-  const peer = new Peer();
-  onStatus('connecting');
 
-  peer.on('open', () => {
-    conn = peer.connect(PREFIX + hostId, { reliable: true, serialization: 'json' });
-    conn.on('open', () => {
-      conn.send({ t: 'hello', v: PROTOCOL });
-      onStatus('linked');
+  function set(s) { if (s !== status) { status = s; onStatus(s); } }
+  function showDown() { set(performance.now() - downSince > GIVE_UP ? 'error' : 'connecting'); }
+
+  function ensurePeer() {
+    if (peer && !peer.destroyed) {
+      if (peer.disconnected) peer.reconnect();
+      return;
+    }
+    peer = new Peer();
+    peer.on('open', () => connect());
+    peer.on('disconnected', () => { if (!api.open) schedule(); });
+    peer.on('error', err => {
+      // peer-unavailable = ホストがまだいない・閉じた。それ以外は中継サーバーの不調など
+      if (err.type !== 'peer-unavailable') console.warn('[link]', err.type, err);
+      if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(err.type)) {
+        try { peer.destroy(); } catch {}
+      }
+      schedule();
+    });
+  }
+
+  function connect() {
+    if (!peer || peer.destroyed || peer.disconnected || !peer.id) { ensurePeer(); return; }
+    if (conn) { const old = conn; conn = null; try { old.close(); } catch {} }
+    const c = peer.connect(PREFIX + hostId, { reliable: true, serialization: 'json' });
+    conn = c;
+    c.on('open', () => {
+      if (conn !== c) return;
+      retryWait = 1000; lastPong = performance.now();
+      c.send({ t: 'hello', v: PROTOCOL });
+      set('linked');
       ping();
     });
-    conn.on('data', msg => {
-      if (msg && msg.t === 'pong') { api.rtt = performance.now() - msg.t0; onMessage(msg); return; }
+    c.on('data', msg => {
+      if (conn !== c || !msg) return;
+      if (msg.t === 'pong') { lastPong = performance.now(); api.rtt = lastPong - msg.t0; }
       onMessage(msg);
     });
-    conn.on('close', () => onStatus('closed'));
-  });
-  peer.on('error', err => { console.warn('[link]', err.type, err); onStatus('error', err.type); });
+    c.on('close', () => lost(c));
+    c.on('error', () => lost(c));
+    // つなぎ込みが返ってこないこともある
+    setTimeout(() => { if (conn === c && !c.open) lost(c); }, 6000);
+  }
+
+  function lost(c) {
+    if (conn !== c) return;
+    conn = null; api.rtt = null;
+    try { c.close(); } catch {}
+    if (status === 'linked') downSince = performance.now();
+    schedule();
+  }
+
+  function schedule(now = false) {
+    showDown();
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => {
+      retryTimer = 0;
+      if (api.open) return;
+      showDown();
+      if (!peer || peer.destroyed || peer.disconnected) ensurePeer(); else connect();
+    }, now ? 0 : retryWait);
+    if (!now) retryWait = Math.min(retryWait * 2, 4000);
+  }
 
   let pingTimer = 0;
   function ping() {
     clearTimeout(pingTimer);
-    if (conn && conn.open) conn.send({ t: 'ping', t0: performance.now(), rtt: api.rtt });
+    if (conn && conn.open) {
+      if (performance.now() - lastPong > TIMEOUT) { lost(conn); return; }
+      conn.send({ t: 'ping', t0: performance.now(), rtt: api.rtt });
+    }
     pingTimer = setTimeout(ping, 2000);
   }
+
+  // 画面に戻ってきたら、待たずにつなぎ直す（スリープ明けなど）
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    // 裏にいる間は ping が止まっているので、3秒だけ待って返事を見る
+    if (api.open) { lastPong = Math.max(lastPong, performance.now() - (TIMEOUT - 3000)); ping(); return; }
+    retryWait = 1000; schedule(true);
+  });
+  setInterval(() => { if (!api.open) showDown(); }, 1000);
+
   function thrust() {
     if (!conn || !conn.open) return false;
     conn.send({ t: 'thrust', seq: ++seq });
     return true;
   }
+
+  set('connecting');
+  ensurePeer();
   return api;
 }
