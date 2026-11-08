@@ -391,7 +391,7 @@ const game = createGame((type, i, why) => {
     dying.length = corpses.length = fx.length = texts.length = 0;
     shift = 0; showOverlay();
   } else if (type === 'end') {
-    stopBattleAudio(); playMusic(i === 'win' ? 'victory' : 'defeat');
+    stopBattleAudio(); playMusic(i === 'win' ? 'victory' : 'defeat'); endShownAt = performance.now();
     showOverlay();
   }
 });
@@ -405,11 +405,23 @@ let entered = false;
 function doThrust() {
   audio();
   if (!entered && game.S.phase === 'title') { entered = true; startTitleMusic(); showOverlay(); return; }
+  if (game.S.phase === 'win' || game.S.phase === 'lose') {
+    // 勝敗の画面からはタイトル（オープニング）に戻る。
+    // 戦闘中の連打でうっかり飛ばさないよう、出てから少しの間は受け付けない
+    if (performance.now() - endShownAt < 1500) return;
+    backToTitle(); return;
+  }
   game.thrust();
+}
+let endShownAt = 0;
+function backToTitle() {
+  stopMusic(); stopBattleAudio(0.4);
+  game.reset(); dying.length = corpses.length = 0;
+  showOverlay(); startTitleMusic();
 }
 addEventListener('keydown', e => {
   if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) doThrust(); }
-  if (e.code === 'KeyR') { stopMusic(); stopBattleAudio(0.4); game.reset(); dying.length = corpses.length = 0; showOverlay(); if (entered) startTitleMusic(); }
+  if (e.code === 'KeyR') { if (entered) backToTitle(); else { game.reset(); showOverlay(); } }
 });
 // タイトルや結果の画面の上からでも押せるよう、画面全体で受け取る
 addEventListener('pointerdown', e => { e.preventDefault(); doThrust(); }, { passive: false });
