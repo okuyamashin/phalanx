@@ -182,7 +182,34 @@ function audio() {
 const SAMPLE_SETS = { bronze: 5, wicker: 5, hit: 5, fall: 5, step: 5, clatter: 3 };
 const SAMPLE_FILES = { bronze: 'shield_bronze', wicker: 'shield_wicker', hit: 'hit', fall: 'fall', step: 'step', clatter: 'clatter' };
 const samples = {};
+// 勝敗の曲（assets/music/victory.mp3・defeat.mp3）。ファイルがなければ鳴らさない
+const music = {};
+let musicNode = null;
+function loadMusic() {
+  for (const name of ['victory', 'defeat']) {
+    fetch(`assets/music/${name}.mp3`).then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); })
+      .then(buf => new Promise((ok, ng) => ac.decodeAudioData(buf, ok, ng)))
+      .then(b => { music[name] = b; }).catch(() => {});
+  }
+}
+function playMusic(name) {
+  stopMusic();
+  const a = ac, b = music[name];
+  if (!a || !b) return;
+  const src = a.createBufferSource(), g = a.createGain(), t = a.currentTime;
+  src.buffer = b;
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.55, t + 0.6); // 絵に合わせて少しフェードイン
+  src.connect(g).connect(a.destination); src.start(t);
+  musicNode = { src, g };
+}
+function stopMusic() {
+  if (!musicNode || !ac) return;
+  const { src, g } = musicNode, t = ac.currentTime;
+  g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(g.gain.value, t); g.gain.linearRampToValueAtTime(0, t + 0.4);
+  src.stop(t + 0.45); musicNode = null;
+}
 function loadSamples() {
+  loadMusic();
   for (const [key, n] of Object.entries(SAMPLE_SETS)) {
     samples[key] = [];
     for (let i = 0; i < n; i++) {
@@ -258,9 +285,11 @@ const game = createGame((type, i, why) => {
   } else if (type === 'enemyRefill') {
     enter.enemy[i] = 1;
   } else if (type === 'start') {
+    stopMusic();
     dying.length = corpses.length = fx.length = texts.length = 0;
     shift = 0; showOverlay();
   } else if (type === 'end') {
+    playMusic(i === 'win' ? 'victory' : 'defeat');
     showOverlay();
   }
 });
@@ -271,7 +300,7 @@ window.phalanx = game; // 開発中の確認用（コンソールから状態を
 function doThrust() { audio(); game.thrust(); }
 addEventListener('keydown', e => {
   if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) doThrust(); }
-  if (e.code === 'KeyR') { game.reset(); dying.length = corpses.length = 0; showOverlay(); }
+  if (e.code === 'KeyR') { stopMusic(); game.reset(); dying.length = corpses.length = 0; showOverlay(); }
 });
 // タイトルや結果の画面の上からでも押せるよう、画面全体で受け取る
 addEventListener('pointerdown', e => { e.preventDefault(); doThrust(); }, { passive: false });

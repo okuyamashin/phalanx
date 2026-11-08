@@ -7,3 +7,5 @@ assets/sounds/_candidates/
 # ダウンロードした素材パック
 kenney_*.zip
 tools/sound-board.html
+# 音楽の元ファイル（作成サービスの情報やアカウント名が埋め込まれているので公開しない）
+assets/music/raw/
