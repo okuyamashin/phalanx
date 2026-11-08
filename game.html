@@ -37,6 +37,30 @@
   #overlay.lose { align-items:flex-start; text-align:left; padding-left:6vw; }  /* 敗北の絵は右上に敵がいるので文字は左へ */
   #overlay.lose h1 { color:#e8d2b0; }
   #overlay { isolation:isolate; }
+  /* タイトル：両軍の整列の絵を、横に流しながらフェードで切り替える */
+  #overlay.title { background:#000; justify-content:flex-start; padding-top:7vh; overflow:hidden; }
+  #overlay.title::after { content:''; position:absolute; inset:0; z-index:-1;
+    background:linear-gradient(#000000c0, #00000030 35%, #00000000 55%, #000000d0); }
+  #slides { position:absolute; inset:0; z-index:-2; overflow:hidden; }
+  #slides div { position:absolute; inset:0; background-size:cover; background-position:center;
+    opacity:0; transition:opacity 1.8s ease; will-change:transform, opacity; }
+  #slides div.show { opacity:1; }
+  #slides div.pan-l { animation:panL 9.5s linear both; }
+  #slides div.pan-r { animation:panR 9.5s linear both; }
+  @keyframes panL { from { transform:scale(1.18) translateX(6%); } to { transform:scale(1.18) translateX(-6%); } }
+  @keyframes panR { from { transform:scale(1.18) translateX(-6%); } to { transform:scale(1.18) translateX(6%); } }
+  #overlay.title h1 { font-size:84px; margin-bottom:6px; text-shadow:0 4px 16px #000; animation:endFade 1.4s ease-out both; }
+  #overlay.title .tag { font-size:19px; text-shadow:0 2px 6px #000; animation:endFade 1.4s .3s ease-out both; }
+  #overlay.title .howto { margin-top:auto; background:#0000009a; border-radius:12px; padding:10px 18px; max-width:680px; }
+  #overlay.title .start { margin:14px 0 4vh; font-size:18px; letter-spacing:.1em; animation:blink 1.6s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity:.35; } }
+  @media (max-height: 500px) {
+    #overlay.title { padding-top:3vh; }
+    #overlay.title h1 { font-size:46px; }
+    #overlay.title .tag { font-size:14px; }
+    #overlay.title .howto p { font-size:12px; margin:2px 0; }
+    #overlay.title .start { margin:6px 0 2vh; font-size:14px; }
+  }
   @keyframes endZoom { from { transform:scale(1.12); filter:brightness(.6); } to { transform:scale(1); filter:brightness(1); } }
   @keyframes endFade { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:none; } }
   @media (max-height: 500px) { #overlay.end h1 { font-size:44px; margin-bottom:8px; } #overlay.end p { font-size:14px; margin:3px 0; } }
@@ -341,23 +365,47 @@ function updateFx(dt) {
   shake = Math.max(0, shake - dt * 30);
 }
 
+// ===== タイトルのスライドショー =====
+// 両軍の整列の絵。7秒ごとに、横に流しながらフェードで切り替える
+const TITLE_IMAGES = ['assets/screens/title_1.jpg', 'assets/screens/title_2.jpg', 'assets/screens/title_3.jpg'];
+let slideTimer = null, slideIndex = -1;
+function nextSlide() {
+  const slides = document.querySelectorAll('#slides div');
+  if (!slides.length) return;
+  const prev = slides[slideIndex];
+  slideIndex = (slideIndex + 1) % slides.length;
+  const cur = slides[slideIndex];
+  cur.classList.remove('pan-l', 'pan-r');
+  void cur.offsetWidth; // アニメーションを最初からやり直す
+  cur.classList.add('show', slideIndex % 2 ? 'pan-r' : 'pan-l');
+  if (prev && prev !== cur) prev.classList.remove('show');
+}
+function startSlides() { stopSlides(); slideIndex = -1; nextSlide(); slideTimer = setInterval(nextSlide, 7000); }
+function stopSlides() { clearInterval(slideTimer); slideTimer = null; }
+
 // ===== HUD・オーバーレイ =====
 const $ = id => document.getElementById(id);
 function showOverlay() {
   const S = game.S, ov = $('overlay');
-  ov.classList.remove('end', 'win', 'lose');
+  ov.classList.remove('end', 'win', 'lose', 'title');
+  stopSlides();
   if (S.phase === 'play') { ov.classList.add('hidden'); return; }
   ov.classList.remove('hidden');
   if (S.phase === 'title') {
-    ov.innerHTML = `<h1>PHALANX</h1>
-      <p>盾を並べて守れ。号令で一斉に突け。</p>
-      <p><b>スペースキー（またはクリック）</b>＝ 隊全体で突く　／　それ以外はずっと守り</p>
-      <p class="dim">足元が<span style="color:#ff6a5a">赤く光る敵</span>＝攻撃の構え（スキあり、でも来る）<br>
-      足元が<span style="color:#ffe08a">金色に光る敵</span>＝戻り中（狙いどき）<br>
-      盾を構えた敵に突くと、弾かれて反撃されることがある<br>
-      突いている間は無防備。守ってばかりだと敵が増えて押される。</p>
-      <p style="margin-top:18px">スペース（スマホはタップ）で開始</p>
+    ov.classList.add('title');
+    ov.innerHTML = `<div id="slides">${TITLE_IMAGES.map(src => `<div style="background-image:url(${src})"></div>`).join('')}</div>
+      <h1>PHALANX</h1>
+      <p class="tag">盾を並べて守れ。号令で一斉に突け。</p>
+      <div class="howto">
+        <p><b>スペースキー（スマホはタップ）</b>＝ 隊全体で突く　／　それ以外はずっと守り</p>
+        <p class="dim">足元が<span style="color:#ff6a5a">赤く光る敵</span>＝攻撃の構え（スキあり、でも来る）　
+        <span style="color:#ffe08a">金色</span>＝戻り中（狙いどき）<br>
+        盾を構えた敵に突くと、弾かれて反撃されることがある。突いている間は無防備。<br>
+        守ってばかりだと敵が増えて押され、崖から落とされる。</p>
+      </div>
+      <p class="start">スペース（スマホはタップ）で開始</p>
       ${innerHeight > innerWidth ? '<p class="dim">スマホは横向きがおすすめです</p>' : ''}`;
+    startSlides();
   } else {
     const win = S.phase === 'win';
     ov.classList.add('end', win ? 'win' : 'lose');
@@ -384,6 +432,8 @@ function updateHud() {
     dots[i].className = !e.alive ? 'gap' : e.state === 'windup' || e.state === 'strike' ? 'red' : e.state === 'recover' ? 'gold' : '';
   });
   pips.classList.toggle('hidden', S.phase !== 'play');
+  $('hud').classList.toggle('hidden', S.phase !== 'play');
+  $('mode').classList.toggle('hidden', S.phase !== 'play');
   const m = $('mode');
   if (S.thrustT >= 0) { m.textContent = '― 突撃中（無防備）―'; m.style.color = '#ffb08a'; }
   else { m.textContent = '盾'; m.style.color = '#f2e8d2'; }
