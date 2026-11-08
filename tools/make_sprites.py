@@ -1,120 +1,145 @@
 """緑背景のスプライトシートを切り分けて、透明PNGのシートとJSONを作る。
 
-使い方: python3 tools/make_sprites.py
-入力:  assets/sprites/raw/hoplite_sheet_chatgpt.png（6ポーズ横並び、背景 #00FF00）
-出力:  assets/sprites/hoplite.png, assets/sprites/hoplite.json
+使い方: python3 tools/make_sprites.py            # すべて作る
+        python3 tools/make_sprites.py persian    # 指定したものだけ
+
+入力: assets/sprites/raw/ の緑背景（#00FF00）のシート
+出力: assets/sprites/<name>.png と <name>.json
+
+JSON の各フレーム:
+  x, y, w, h   … 出力シート内の位置
+  baseline     … フレームの上端から足元の基準線までの高さ
+  anchor       … フレーム左端から「立ち位置」までの距離（後ろ足、または指定値）
+シート全体:
+  height       … 立ちポーズの身長（px）。描くときの大きさをそろえるのに使う
+  facing       … 'right' / 'left'
 """
 from collections import deque
 import json, sys
 import numpy as np
 from PIL import Image
 
-SRC = 'assets/sprites/raw/hoplite_sheet_chatgpt.png'
-OUT_PNG = 'assets/sprites/hoplite.png'
-OUT_JSON = 'assets/sprites/hoplite.json'
-CUTS = [340]  # 元画像のx座標。くっついているポーズを切り離す位置
-# 切り離したあとに他のポーズの破片が残る場所（フレーム名, x0, x1, y0, y1）。元画像の座標。
-# この範囲の暗い画素（槍の柄・こぶし）だけを消し、明るい槍先は残す
-ERASE_DARK = [('guard', 326, 342, 252, 269)]
-# 同じく、明るい灰色の画素（他のポーズの槍先）だけを消す
-ERASE_STEEL = [('windup', 334, 356, 262, 274)]
-NAMES = ['guard', 'windup', 'thrust', 'hit', 'collapse', 'fallen']
+SHEETS = {
+    'hoplite': dict(
+        src='assets/sprites/raw/hoplite_sheet_chatgpt.png',
+        facing='right',
+        # 各ポーズのおおよその中心（元画像の座標）。部品はいちばん近い中心のポーズに入る
+        frames=[('guard', 141, 380), ('windup', 478, 380), ('thrust', 825, 380),
+                ('hit', 1205, 380), ('collapse', 1553, 450), ('fallen', 1933, 500)],
+        standing=['guard', 'windup', 'thrust', 'hit'],
+        cuts=[340],  # くっついているポーズを縦に切り離すx
+        # 切り離したあとに他のポーズの破片が残る場所（フレーム名, x0, x1, y0, y1）
+        erase_dark=[('guard', 326, 342, 252, 269)],    # 暗い画素（槍の柄・こぶし）だけ消す
+        erase_steel=[('windup', 334, 356, 262, 274)],  # 明るい灰色（槍先）だけ消す
+        anchor={'collapse': 70, 'fallen': 320},
+    ),
+    'persian': dict(
+        src='assets/sprites/raw/persian_sheet_chatgpt.png',
+        facing='left',
+        frames=[('guard', 175, 250), ('windup', 560, 250), ('strike', 900, 260), ('recover', 1320, 260),
+                ('hit', 200, 750), ('collapse', 660, 790), ('fallen', 1230, 850)],
+        standing=['guard', 'windup', 'strike', 'recover', 'hit'],
+        cuts=[], erase_dark=[], erase_steel=[],
+        anchor={'collapse': 330, 'fallen': 300},
+    ),
+}
+
 
 def chroma(rgb):
     r, g, b = [rgb[..., k].astype(np.float32) for k in range(3)]
     m = np.maximum(r, b)
-    # 緑っぽさ 0..1（1 = 完全に背景）
-    greenness = np.clip((g - m - 40) / 80, 0, 1)
+    greenness = np.clip((g - m - 40) / 80, 0, 1)   # 1 = 完全に背景
     alpha = 1 - greenness
-    # 縁の緑かぶりを取る
-    g2 = np.where(g > m, m + (g - m) * 0.15, g)
-    out = np.stack([r, g2, b], -1)
-    return out, alpha
+    g2 = np.where(g > m, m + (g - m) * 0.15, g)     # 縁の緑かぶりを取る
+    return np.stack([r, g2, b], -1), alpha
+
 
 def label(mask):
     h, w = mask.shape
     lab = np.zeros((h, w), np.int32); n = 0; comps = []
     for y0 in range(h):
-        row = mask[y0]
-        for x0 in np.nonzero(row & (lab[y0] == 0))[0]:
+        for x0 in np.nonzero(mask[y0] & (lab[y0] == 0))[0]:
             if lab[y0, x0]: continue
             n += 1; q = deque([(y0, x0)]); lab[y0, x0] = n
             xs = []; ys = []
             while q:
                 y, x = q.popleft(); xs.append(x); ys.append(y)
-                for dy, dx in ((1,0),(-1,0),(0,1),(0,-1)):
-                    yy, xx = y+dy, x+dx
+                for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    yy, xx = y + dy, x + dx
                     if 0 <= yy < h and 0 <= xx < w and mask[yy, xx] and not lab[yy, xx]:
                         lab[yy, xx] = n; q.append((yy, xx))
-            comps.append(dict(id=n, size=len(xs), cx=float(np.mean(xs)), x0=min(xs), x1=max(xs), y0=min(ys), y1=max(ys)))
+            comps.append(dict(id=n, size=len(xs), cx=float(np.mean(xs)), cy=float(np.mean(ys))))
     return lab, comps
 
-def main():
-    im = np.asarray(Image.open(SRC).convert('RGB'))
+
+def build(name, cfg):
+    im = np.asarray(Image.open(cfg['src']).convert('RGB'))
     H, W = im.shape[:2]
     rgb, alpha = chroma(im)
-    # 半分の解像度でラベル付け（速さのため）
-    small = alpha[::2, ::2] > 0.5
-    # 1枚目の槍先が2枚目のこぶしに触れているので、縦に切り離す
-    for cut in CUTS: small[:, cut // 2] = False
+
+    small = alpha[::2, ::2] > 0.5   # 半分の解像度でラベル付け（速さのため）
+    for cut in cfg['cuts']: small[:, cut // 2] = False
     lab, comps = label(small)
     comps = [c for c in comps if c['size'] > 30]
-    centers = [c * W / 2000 / 2 for c in (130, 440, 760, 1110, 1430, 1780)]  # 半解像度での各ポーズ中心
-    frames = [[] for _ in NAMES]
+    names = [f[0] for f in cfg['frames']]
+    centers = [(f[1] / 2, f[2] / 2) for f in cfg['frames']]
+    groups = [[] for _ in names]
     for c in comps:
-        k = int(np.argmin([abs(c['cx'] - x) for x in centers]))
-        frames[k].append(c)
-    for k, fr in enumerate(frames):
-        print(NAMES[k], [(c['size'], c['x0']*2, c['x1']*2) for c in sorted(fr, key=lambda c: -c['size'])[:4]], file=sys.stderr)
-
-    # 各フレームの切り出し（元の縦位置を保つ＝足元の高さがそろったまま）
+        k = int(np.argmin([(c['cx'] - x) ** 2 + (c['cy'] - y) ** 2 for x, y in centers]))
+        groups[k].append(c['id'])
     labf = np.kron(lab, np.ones((2, 2), np.int32))[:H, :W]
+
     pad = 6
     cells = []
-    for k, fr in enumerate(frames):
-        ids = [c['id'] for c in fr]
+    for k, ids in enumerate(groups):
         m = np.isin(labf, ids)
-        # 縁のぼかし分を拾うため、マスクを少し太らせる
-        mm = m.copy()
+        mm = m.copy()   # 縁のぼかし分を拾うため、マスクを少し太らせる
         for s in range(1, 3):
             mm[s:] |= m[:-s]; mm[:-s] |= m[s:]; mm[:, s:] |= m[:, :-s]; mm[:, :-s] |= m[:, s:]
         a = np.where(mm, alpha, 0)
-        for name, ex0, ex1, ey0, ey1 in ERASE_DARK:
-            if name == NAMES[k]:
+        for fname, ex0, ex1, ey0, ey1 in cfg['erase_dark']:
+            if fname == names[k]:
                 lum = im[ey0:ey1, ex0:ex1].astype(np.float32).mean(-1)
                 a[ey0:ey1, ex0:ex1] = np.where(lum < 120, 0, a[ey0:ey1, ex0:ex1])
-        for name, ex0, ex1, ey0, ey1 in ERASE_STEEL:
-            if name == NAMES[k]:
+        for fname, ex0, ex1, ey0, ey1 in cfg['erase_steel']:
+            if fname == names[k]:
                 px = im[ey0:ey1, ex0:ex1].astype(np.float32)
                 steel = (px[..., 0] > 80) & (px[..., 2] > 80) & (np.abs(px[..., 0] - px[..., 2]) < 40)
                 a[ey0:ey1, ex0:ex1] = np.where(steel, 0, a[ey0:ey1, ex0:ex1])
         ys, xs = np.nonzero(a > 0.02)
-        x0, x1, y0, y1 = xs.min() - pad, xs.max() + pad, ys.min() - pad, ys.max() + pad
-        x0, y0 = max(0, x0), max(0, y0)
-        cells.append(dict(name=NAMES[k], x0=int(x0), x1=int(x1), y0=int(y0), y1=int(y1), a=a))
+        cells.append(dict(name=names[k], a=a, x0=max(0, xs.min() - pad), x1=min(W, xs.max() + pad),
+                          y0=max(0, ys.min() - pad), y1=min(H, ys.max() + pad), cy=cfg['frames'][k][2]))
 
-    # 共通の基準線（立ちポーズの足元のいちばん下）
-    base = max(c['y1'] for c in cells[:4]) - pad
-    top = min(c['y0'] for c in cells)
-    bottom = max(c['y1'] for c in cells)
-    cellH = bottom - top
+    # 足元の基準線：同じ段（y が近い）の立ちポーズのいちばん下
+    for c in cells:
+        row = [d for d in cells if d['name'] in cfg['standing'] and abs(d['cy'] - c['cy']) < H * 0.25]
+        if not row: row = [d for d in cells if d['name'] in cfg['standing']]
+        c['base'] = max(d['y1'] for d in row) - pad
+    heights = [c['base'] - c['y0'] - pad for c in cells if c['name'] in cfg['standing']]
+
+    # 出力：横一列に並べる
     sheetW = sum(c['x1'] - c['x0'] for c in cells)
-    sheet = np.zeros((cellH, sheetW, 4), np.float32)
-    meta = dict(image='hoplite.png', baseline=int(base - top), frames={})
+    sheetH = max(max(c['y1'], c['base'] + pad) - c['y0'] for c in cells)
+    sheet = np.zeros((sheetH, sheetW, 4), np.float32)
+    meta = dict(image=f'{name}.png', facing=cfg['facing'], height=int(np.median(heights)), frames={})
     ox = 0
     for c in cells:
-        w = c['x1'] - c['x0']
-        sl = (slice(top, bottom), slice(c['x0'], c['x1']))
-        sheet[:, ox:ox+w, :3] = rgb[sl]
-        sheet[:, ox:ox+w, 3] = c['a'][sl] * 255
-        # 足元の位置（基準線付近の不透明ピクセルの左端＝後ろ足）
-        band = c['a'][base-40:base+1, c['x0']:c['x1']] > 0.5
+        w, h = c['x1'] - c['x0'], c['y1'] - c['y0']
+        sl = (slice(c['y0'], c['y1']), slice(c['x0'], c['x1']))
+        sheet[:h, ox:ox + w, :3] = rgb[sl]
+        sheet[:h, ox:ox + w, 3] = c['a'][sl] * 255
+        # 後ろ足：基準線付近の不透明ピクセルの端（右向きなら左端、左向きなら右端）
+        band = c['a'][c['base'] - 40:c['base'] + 1, c['x0']:c['x1']] > 0.5
         cols = np.nonzero(band.any(0))[0]
-        foot = int(cols.min()) if len(cols) else w // 2
-        meta['frames'][c['name']] = dict(x=ox, y=0, w=int(w), h=int(cellH), srcX=int(c['x0']), backFoot=foot)
+        foot = (int(cols.min()) if cfg['facing'] == 'right' else int(cols.max())) if len(cols) else w // 2
+        meta['frames'][c['name']] = dict(x=int(ox), y=0, w=int(w), h=int(h), baseline=int(c['base'] - c['y0']),
+                                         anchor=int(cfg['anchor'].get(c['name'], foot)))
         ox += w
-    Image.fromarray(np.clip(sheet, 0, 255).astype(np.uint8), 'RGBA').save(OUT_PNG, optimize=True)
-    json.dump(meta, open(OUT_JSON, 'w'), indent=1, ensure_ascii=False)
-    print(json.dumps(meta, indent=1), file=sys.stderr)
+    Image.fromarray(np.clip(sheet, 0, 255).astype(np.uint8), 'RGBA').save(f'assets/sprites/{name}.png', optimize=True)
+    json.dump(meta, open(f'assets/sprites/{name}.json', 'w'), indent=1, ensure_ascii=False)
+    print(name, json.dumps(meta['frames']), 'height', meta['height'], file=sys.stderr)
 
-main()
+
+if __name__ == '__main__':
+    for n in (sys.argv[1:] or SHEETS):
+        build(n, SHEETS[n])

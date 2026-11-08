@@ -8,26 +8,27 @@
   html,body { margin:0; height:100%; overflow:hidden; background:#1a140e; color:#f2e8d2;
     font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; }
   canvas { display:block; width:100vw; height:100vh; touch-action:none; }
-  #help { position:fixed; left:16px; bottom:14px; font-size:13px; color:#f2e8d2cc; text-shadow:0 1px 3px #000; pointer-events:none; }
+  #help { position:fixed; left:16px; bottom:14px; font-size:13px; color:#f2e8d2cc; text-shadow:0 1px 3px #000; pointer-events:none; line-height:1.6; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="help">スペース：全員で突く　／　D：誰かが倒れる　／　A：自動（バラバラに動く）切り替え</div>
+<div id="help">スペース：味方が全員で突く（足元が<span style="color:#ff7060">赤</span>・<span style="color:#ffe08a">金</span>の敵に当たる）<br>
+D：味方の誰かが倒れる　／　E：敵の誰かが倒れる　／　A：自動（バラバラに動く）切り替え</div>
 <script>
 'use strict';
 // 疑似3D（2.5D）のスプライト動作確認ページ。
-// 1つの角度から描いた絵（assets/sprites/hoplite.png）をコマ送りで動かし、
-// 奥に向かって並べて隊列にする。ゲームのルールとはまだつないでいない。
+// 1つの角度から描いた絵をコマ送りで動かし、奥に向かって並べて隊列にする。
+// 味方（左・右向き）と敵（右・左向き）が向かい合う。ゲームのルールとはまだつないでいない。
 
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');
-let W = 0, H = 0, DPR = 1;
+let W = 0, H = 0;
 function resize() {
-  DPR = Math.min(devicePixelRatio || 1, 2);
+  const dpr = Math.min(devicePixelRatio || 1, 2);
   W = innerWidth; H = innerHeight;
-  cv.width = W * DPR; cv.height = H * DPR;
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  cv.width = W * dpr; cv.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 addEventListener('resize', resize); resize();
 
@@ -36,122 +37,165 @@ const clamp01 = v => Math.max(0, Math.min(1, v));
 const ease = t => t * t * (3 - 2 * t);
 
 // ===== 素材 =====
-const img = new Image();
-let meta = null;
-// 各コマの「立ち位置」の基準（シート内のx）。足が地面に着いている点
-const ANCHOR = { collapse: 70, fallen: 320 };
+const SPRITES = { hoplite: {}, persian: {} };
+function loadSprite(name) {
+  const s = SPRITES[name];
+  return Promise.all([
+    fetch(`assets/sprites/${name}.json`).then(r => r.json()).then(m => { s.meta = m; }),
+    new Promise((ok, ng) => { s.img = new Image(); s.img.onload = ok; s.img.onerror = ng; s.img.src = `assets/sprites/${name}.png`; }),
+  ]);
+}
+const BODY_PX = 330; // 手前の兵の身長（画面上のpx、unit=1のとき）
 
 // ===== 隊列 =====
-const FILES = 11;   // 奥に向かう人数（横一列 = 画面では奥行き方向）
-const RANKS = 3;    // 前後の列数（1列目が前で動く。2・3列目は控え）
-const soldiers = [];
+const FILES = 11;   // 奥に向かう人数
+const RANKS = 3;    // 前後の列数（前列が動く。後ろは控え）
+const units = [];
 const corpses = [];
 let auto = true;
 
-function makeSoldier(file, rank) {
-  return { file, rank, state: 'guard', t: 0, next: rand(1, 5), phase: rand(0, 6.28), enter: 0 };
+for (const side of ['ally', 'enemy'])
+  for (let f = 0; f < FILES; f++) for (let r = 0; r < RANKS; r++)
+    units.push({ side, file: f, rank: r, state: 'guard', t: 0, next: rand(0.5, 4), phase: rand(0, 6.28), enter: 0 });
+const front = (side, f) => units.find(u => u.side === side && u.file === f && u.rank === 0);
+
+// 時間（秒）
+const T = {
+  windup: 0.16, strike: 0.10, hold: 0.20, back: 0.18,           // 味方の突き
+  eWindup: 0.5, eStrike: 0.18, eRecover: 0.6,                   // 敵の攻撃
+  hit: 0.16, collapse: 0.34,
+};
+
+function allyThrust(u) { if (u.state === 'guard' && u.enter <= 0) { u.state = 'thrust'; u.t = 0; } }
+function enemyAttack(u) { if (u.state === 'guard' && u.enter <= 0) { u.state = 'windup'; u.t = 0; } }
+function kill(u) { if (u.rank === 0 && u.state !== 'dying') { u.state = 'dying'; u.t = 0; } }
+function randomFront(side) {
+  const list = units.filter(u => u.side === side && u.rank === 0 && u.state !== 'dying');
+  return list[Math.floor(Math.random() * list.length)];
 }
-for (let f = 0; f < FILES; f++) for (let r = 0; r < RANKS; r++) soldiers.push(makeSoldier(f, r));
 
-// 状態：guard（守り）→ thrust（溜め→突き→戻り）/ hit→collapse→fallen（倒れる）
-const T = { windup: 0.16, strike: 0.10, hold: 0.20, back: 0.18, hit: 0.16, collapse: 0.34 };
-
-function thrust(s) { if (s.state === 'guard' && s.enter <= 0) { s.state = 'thrust'; s.t = 0; } }
-function kill(s) {
-  if (s.state === 'dead' || s.rank !== 0) return;
-  s.state = 'dying'; s.t = 0;
+function volley() {
+  units.filter(u => u.side === 'ally' && u.rank === 0).forEach(allyThrust);
+  // 構え中・戻り中の敵は突きが通る
+  setTimeout(() => {
+    for (let f = 0; f < FILES; f++) {
+      const a = front('ally', f), e = front('enemy', f);
+      if (a.state === 'thrust' && (e.state === 'windup' || e.state === 'recover')) kill(e);
+    }
+  }, (T.windup + T.strike) * 1000);
 }
 
 addEventListener('keydown', e => {
-  if (e.code === 'Space') { e.preventDefault(); soldiers.filter(s => s.rank === 0).forEach(thrust); }
-  if (e.code === 'KeyD') { const alive = soldiers.filter(s => s.rank === 0 && s.state !== 'dying'); if (alive.length) kill(alive[Math.floor(Math.random() * alive.length)]); }
+  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) volley(); }
+  if (e.code === 'KeyD') { const u = randomFront('ally'); if (u) kill(u); }
+  if (e.code === 'KeyE') { const u = randomFront('enemy'); if (u) kill(u); }
   if (e.code === 'KeyA') auto = !auto;
 });
-cv.addEventListener('pointerdown', () => soldiers.filter(s => s.rank === 0).forEach(thrust));
+cv.addEventListener('pointerdown', volley);
 
 function update(dt) {
-  for (const s of soldiers) {
-    s.t += dt; s.enter = Math.max(0, s.enter - dt * 2.2);
-    if (s.state === 'thrust' && s.t > T.windup + T.strike + T.hold + T.back) { s.state = 'guard'; s.t = 0; }
-    if (s.state === 'dying' && s.t > T.hit + T.collapse) {
-      // 倒れた兵は地面に残し、2列目が前に出る
-      corpses.push({ file: s.file, t: 0 });
-      const behind = soldiers.find(o => o.file === s.file && o.rank === 1);
-      s.state = 'guard'; s.t = 0; s.enter = 1; // 前列に新しい兵が入ってくる
-      if (behind) behind.enter = 1;            // 2列目も補充されたように見せる
+  for (const u of units) {
+    u.t += dt; u.enter = Math.max(0, u.enter - dt * 2.2);
+    if (u.state === 'thrust' && u.t > T.windup + T.strike + T.hold + T.back) { u.state = 'guard'; u.t = 0; }
+    if (u.state === 'windup' && u.t > T.eWindup) { u.state = 'strike'; u.t = 0; }
+    if (u.state === 'strike' && u.t > T.eStrike) {
+      u.state = 'recover'; u.t = 0;
+      const a = front('ally', u.file);
+      if (a.state === 'thrust' && Math.random() < 0.6) kill(a); // 突いている最中は無防備
     }
-    if (auto && s.rank === 0 && s.state === 'guard') {
-      s.next -= dt;
-      if (s.next <= 0) { s.next = rand(1.5, 5); if (Math.random() < 0.85) thrust(s); else kill(s); }
+    if (u.state === 'recover' && u.t > T.eRecover) { u.state = 'guard'; u.t = 0; }
+    if (u.state === 'dying' && u.t > T.hit + T.collapse) {
+      // 倒れた兵は地面に残し、後ろの列から補充されたように見せる
+      corpses.push({ side: u.side, file: u.file, t: 0, x: 0 });
+      u.state = 'guard'; u.t = 0; u.enter = 1;
+      const behind = units.find(o => o.side === u.side && o.file === u.file && o.rank === 1);
+      if (behind) behind.enter = 1;
+    }
+    if (auto && u.rank === 0 && u.state === 'guard') {
+      u.next -= dt;
+      if (u.next <= 0) {
+        u.next = rand(1.5, 5);
+        if (u.side === 'ally') { if (Math.random() < 0.85) allyThrust(u); else kill(u); }
+        else { if (Math.random() < 0.85) enemyAttack(u); else kill(u); }
+      }
     }
   }
   for (let i = corpses.length - 1; i >= 0; i--) if ((corpses[i].t += dt) > 6) corpses.splice(i, 1);
 }
 
 // ===== 投影：奥へ向かう消失点 =====
-function project(file, rank) {
-  // file: 0 = 手前。奥に行くほど小さく、消失点（左上）へ寄る
+const GAP = 330;   // 味方の前列と敵の前列の間（unit=1のときのpx）
+const RANK_GAP = 170;
+function project(side, file, rank) {
   const sc = 1 / (1 + file * 0.2);
-  const near = { x: W * 0.46, y: H * 0.93 };
-  const vp = { x: W * 0.12, y: H * 0.42 };
+  const near = { x: W * 0.36, y: H * 0.93 };
+  const vp = { x: W * 0.16, y: H * 0.42 };
   const base = { x: vp.x + (near.x - vp.x) * sc, y: vp.y + (near.y - vp.y) * sc };
-  const unit = Math.min(W, H * 1.6) / 1300 * sc;   // 画面上の大きさ
-  // 後ろの列は左（＝自軍の後方）に、少し上へずらす
-  return { x: base.x - rank * 175 * unit, y: base.y - rank * 18 * unit, unit, sc };
+  const unit = Math.min(W / 1500, H / 850) * sc;
+  const dir = side === 'ally' ? -1 : 1;   // 後ろの列の方向
+  const x0 = side === 'ally' ? 0 : GAP;
+  return { x: base.x + (x0 + dir * rank * RANK_GAP) * unit, y: base.y - rank * 16 * unit, unit, sc };
+}
+
+// ===== コマの選択 =====
+function allyFrame(u) {
+  const t = u.t;
+  if (u.state === 'thrust') {
+    if (t < T.windup) return { a: 'windup', dx: -10 * ease(t / T.windup) };
+    if (t < T.windup + T.strike + T.hold) return { a: 'thrust', dx: 26 * ease(clamp01((t - T.windup) / T.strike)), blur: t < T.windup + T.strike + 0.05 ? 'windup' : null };
+    const b = (t - T.windup - T.strike - T.hold) / T.back;
+    return { a: 'guard', dx: 26 * (1 - ease(b)), ghost: 'thrust', ghostA: 1 - b };
+  }
+  if (u.state === 'dying') return t < T.hit ? { a: 'hit', dx: -18 * ease(t / T.hit) } : { a: 'collapse', dx: -18 };
+  return { a: 'guard', dx: 0, breathe: true };
+}
+function enemyFrame(u) {
+  const t = u.t;
+  if (u.state === 'windup') return { a: 'windup', dx: 8 * ease(clamp01(t / 0.2)), cue: 'red' };
+  if (u.state === 'strike') return { a: 'strike', dx: -22 * ease(clamp01(t / 0.08)), blur: t < 0.06 ? 'windup' : null, cue: 'red' };
+  if (u.state === 'recover') return { a: 'recover', dx: -10 * (1 - ease(clamp01(t / T.eRecover))), cue: 'gold' };
+  if (u.state === 'dying') return t < T.hit ? { a: 'hit', dx: 18 * ease(t / T.hit) } : { a: 'collapse', dx: 18 };
+  return { a: 'guard', dx: 0, breathe: true };
 }
 
 // ===== 描画 =====
-function frameFor(s) {
-  if (s.state === 'thrust') {
-    const t = s.t;
-    if (t < T.windup) return { a: 'windup', dx: -10 * ease(t / T.windup) };
-    if (t < T.windup + T.strike + T.hold) return { a: 'thrust', dx: 26 * ease(clamp01((t - T.windup) / T.strike)), blur: t < T.windup + T.strike + 0.05 ? 'windup' : null };
-    return { a: 'guard', dx: 26 * (1 - ease((t - T.windup - T.strike - T.hold) / T.back)), ghost: 'thrust', ghostA: 1 - (t - T.windup - T.strike - T.hold) / T.back };
-  }
-  if (s.state === 'dying') {
-    if (s.t < T.hit) return { a: 'hit', dx: -18 * ease(s.t / T.hit) };
-    return { a: 'collapse', dx: -18 };
-  }
-  return { a: 'guard', dx: 0 };
-}
-
-function drawFrame(name, x, y, unit, alpha = 1, flash = 0) {
+function drawFrame(sprite, name, x, y, unit, alpha = 1) {
+  const { img, meta } = SPRITES[sprite];
   const f = meta.frames[name];
-  const anchor = ANCHOR[name] ?? f.backFoot;
-  const k = unit * 0.78;
+  const k = unit * BODY_PX / meta.height;
   ctx.globalAlpha = alpha;
-  ctx.drawImage(img, f.x, f.y, f.w, f.h, x - anchor * k, y - meta.baseline * k, f.w * k, f.h * k);
+  ctx.drawImage(img, f.x, f.y, f.w, f.h, x - f.anchor * k, y - f.baseline * k, f.w * k, f.h * k);
   ctx.globalAlpha = 1;
 }
-
-function shadow(x, y, unit, w = 170, a = 0.35) {
-  ctx.save();
+function shadow(x, y, unit, w, a = 0.35) {
   ctx.fillStyle = `rgba(30,18,8,${a})`;
-  ctx.beginPath(); ctx.ellipse(x + 40 * unit, y - 2 * unit, w * unit * 0.6, 18 * unit, -0.05, 0, Math.PI * 2); ctx.fill();
-  ctx.restore();
+  ctx.beginPath(); ctx.ellipse(x, y - 2 * unit, w * unit, 18 * unit, -0.05, 0, Math.PI * 2); ctx.fill();
+}
+function cue(x, y, unit, color) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, 90 * unit);
+  const c = color === 'red' ? '255,70,50' : '255,215,110';
+  g.addColorStop(0, `rgba(${c},0.75)`); g.addColorStop(1, `rgba(${c},0)`);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(x, y, 95 * unit, 26 * unit, 0, 0, Math.PI * 2); ctx.fill();
 }
 
 // 背景
 const hills = Array.from({ length: 9 }, (_, i) => ({ x: i / 8, h: rand(0.05, 0.12), w: rand(0.15, 0.3) }));
 const motes = Array.from({ length: 140 }, () => ({ x: Math.random(), y: rand(0.3, 1), r: rand(20, 90), v: rand(0.004, 0.02), a: rand(0.03, 0.09) }));
-function background(t) {
+function background() {
   const sky = ctx.createLinearGradient(0, 0, 0, H * 0.45);
   sky.addColorStop(0, '#6f8fb6'); sky.addColorStop(1, '#e2cfa6');
   ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
-  // 夕陽
   const sun = ctx.createRadialGradient(W * 0.85, H * 0.28, 0, W * 0.85, H * 0.28, W * 0.5);
   sun.addColorStop(0, 'rgba(255,225,160,0.9)'); sun.addColorStop(1, 'rgba(255,225,160,0)');
   ctx.fillStyle = sun; ctx.fillRect(0, 0, W, H);
-  // 丘
   ctx.fillStyle = '#9b8f6b';
   for (const h of hills) { ctx.beginPath(); ctx.ellipse(h.x * W, H * 0.44, h.w * W, h.h * H, 0, Math.PI, 0); ctx.fill(); }
-  // 地面
   const g = ctx.createLinearGradient(0, H * 0.42, 0, H);
   g.addColorStop(0, '#c9b083'); g.addColorStop(0.4, '#a98756'); g.addColorStop(1, '#6e5233');
   ctx.fillStyle = g; ctx.fillRect(0, H * 0.42, W, H);
-  // 右奥（敵の来る方向）の砂煙
-  const dust = ctx.createRadialGradient(W * 0.88, H * 0.5, 0, W * 0.88, H * 0.5, W * 0.45);
-  dust.addColorStop(0, 'rgba(225,200,150,0.75)'); dust.addColorStop(1, 'rgba(225,200,150,0)');
+  const dust = ctx.createRadialGradient(W * 0.9, H * 0.5, 0, W * 0.9, H * 0.5, W * 0.4);
+  dust.addColorStop(0, 'rgba(225,200,150,0.6)'); dust.addColorStop(1, 'rgba(225,200,150,0)');
   ctx.fillStyle = dust; ctx.fillRect(0, 0, W, H);
 }
 function haze(dt) {
@@ -163,34 +207,36 @@ function haze(dt) {
 }
 
 function draw(dt, now) {
-  background(now);
-  // 奥から手前へ。同じ奥行きでは後ろの列から
-  const order = [];
+  background();
   for (let f = FILES - 1; f >= 0; f--) {
-    for (const c of corpses) if (c.file === f) order.push({ corpse: c, f });
-    for (let r = RANKS - 1; r >= 0; r--) order.push({ s: soldiers.find(s => s.file === f && s.rank === r), f });
-  }
-  for (const o of order) {
-    if (o.corpse) {
-      const p = project(o.f, 0);
-      const a = clamp01((6 - o.corpse.t) / 1.5);
-      shadow(p.x - 60 * p.unit, p.y, p.unit, 260, 0.3 * a);
-      drawFrame('fallen', p.x - 18 * p.unit, p.y + 6 * p.unit, p.unit, a);
-      continue;
+    // 倒れた兵（地面）→ 後ろの列 → 前列 の順に描く
+    for (const c of corpses) {
+      if (c.file !== f) continue;
+      const p = project(c.side, f, 0), a = clamp01((6 - c.t) / 1.5);
+      const sprite = c.side === 'ally' ? 'hoplite' : 'persian';
+      const off = (c.side === 'ally' ? -18 : 18) * p.unit;
+      shadow(p.x + off, p.y, p.unit, 160, 0.3 * a);
+      drawFrame(sprite, 'fallen', p.x + off, p.y + 6 * p.unit, p.unit, a);
     }
-    const s = o.s, p = project(o.f, s.rank);
-    // 補充：一つ後ろの位置から歩いて入ってくる
-    const enterOff = -175 * p.unit * ease(s.enter);
-    const breathe = Math.sin(now * 2.2 + s.phase) * 1.5 * p.unit;
-    const fr = frameFor(s);
-    const x = p.x + fr.dx * p.unit + enterOff, y = p.y;
-    shadow(x, y, p.unit);
-    if (fr.blur) drawFrame(fr.blur, x - 12 * p.unit, y, p.unit, 0.35);
-    if (fr.ghost) drawFrame(fr.ghost, x, y, p.unit, 0.4 * clamp01(fr.ghostA));
-    drawFrame(fr.a, x, y + breathe * (fr.a === 'guard' ? 1 : 0), p.unit);
+    for (let r = RANKS - 1; r >= 0; r--) {
+      for (const side of ['enemy', 'ally']) {
+        const u = units.find(o => o.side === side && o.file === f && o.rank === r);
+        const p = project(side, f, r);
+        const ally = side === 'ally';
+        const fr = ally ? allyFrame(u) : enemyFrame(u);
+        const sprite = ally ? 'hoplite' : 'persian';
+        const enterOff = (ally ? -1 : 1) * RANK_GAP * p.unit * ease(u.enter);
+        const x = p.x + fr.dx * p.unit + enterOff;
+        const breathe = fr.breathe ? Math.sin(now * 2.2 + u.phase) * 1.5 * p.unit : 0;
+        shadow(x + (ally ? 50 : -50) * p.unit, p.y, p.unit, 100);
+        if (fr.cue) cue(x - 50 * p.unit, p.y, p.unit, fr.cue);
+        if (fr.blur) drawFrame(sprite, fr.blur, x + (ally ? -12 : 12) * p.unit, p.y, p.unit, 0.35);
+        if (fr.ghost) drawFrame(sprite, fr.ghost, x, p.y, p.unit, 0.4 * clamp01(fr.ghostA));
+        drawFrame(sprite, fr.a, x, p.y + breathe, p.unit);
+      }
+    }
   }
   haze(dt);
-  // 周辺減光
   const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
   v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(20,10,0,0.55)');
   ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
@@ -202,14 +248,12 @@ function loop(now) {
   update(dt); draw(dt, now / 1000);
   requestAnimationFrame(loop);
 }
-
-Promise.all([
-  fetch('assets/sprites/hoplite.json').then(r => r.json()).then(m => { meta = m; }),
-  new Promise((ok, ng) => { img.onload = ok; img.onerror = ng; img.src = 'assets/sprites/hoplite.png'; }),
-]).then(() => requestAnimationFrame(loop)).catch(err => {
-  ctx.fillStyle = '#f2e8d2'; ctx.font = '16px sans-serif';
-  ctx.fillText('素材を読み込めませんでした。ローカルサーバー経由で開いてください。' + err, 20, 40);
-});
+Promise.all(Object.keys(SPRITES).map(loadSprite))
+  .then(() => requestAnimationFrame(loop))
+  .catch(err => {
+    ctx.fillStyle = '#f2e8d2'; ctx.font = '16px sans-serif';
+    ctx.fillText('素材を読み込めませんでした。ローカルサーバー経由で開いてください。 ' + err, 20, 40);
+  });
 </script>
 </body>
 </html>

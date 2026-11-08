@@ -1,0 +1,63 @@
+{
+ "image": "persian.png",
+ "facing": "left",
+ "height": 452,
+ "frames": {
+  "guard": {
+   "x": 0,
+   "y": 0,
+   "w": 333,
+   "h": 463,
+   "baseline": 470,
+   "anchor": 327
+  },
+  "windup": {
+   "x": 333,
+   "y": 0,
+   "w": 382,
+   "h": 451,
+   "baseline": 457,
+   "anchor": 370
+  },
+  "strike": {
+   "x": 715,
+   "y": 0,
+   "w": 438,
+   "h": 462,
+   "baseline": 456,
+   "anchor": 387
+  },
+  "recover": {
+   "x": 1153,
+   "y": 0,
+   "w": 389,
+   "h": 463,
+   "baseline": 458,
+   "anchor": 300
+  },
+  "hit": {
+   "x": 1542,
+   "y": 0,
+   "w": 384,
+   "h": 474,
+   "baseline": 468,
+   "anchor": 307
+  },
+  "collapse": {
+   "x": 1926,
+   "y": 0,
+   "w": 523,
+   "h": 359,
+   "baseline": 379,
+   "anchor": 330
+  },
+  "fallen": {
+   "x": 2449,
+   "y": 0,
+   "w": 578,
+   "h": 207,
+   "baseline": 228,
+   "anchor": 300
+  }
+ }
+}
