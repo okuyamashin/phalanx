@@ -7,6 +7,7 @@
 //   ホスト → スマホ : {t:'pong', t0}  {t:'state', phase}（phase = gate / title / play / win / lose）
 
 export const PROTOCOL = 1;
+export const VERSION = 5; // 画面の隅に出して、古いファイルが使われていないか見分ける
 const PREFIX = 'phalanx-';
 
 // ===== 中継サーバー（TURN）=====
@@ -22,7 +23,9 @@ const iceServers = [
   { urls: 'turn:global.relay.metered.ca:443', username: TURN_USER, credential: TURN_PASS },
   { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: TURN_USER, credential: TURN_PASS },
 ];
-const peerOpts = () => ({ config: { iceServers } });
+// 確かめる用：URL に ?relay を付けると、直接はつながず必ず中継を通す（携帯回線の代わりに試せる）
+const FORCE_RELAY = new URLSearchParams(location.search).has('relay');
+const peerOpts = () => ({ config: { iceServers, iceTransportPolicy: FORCE_RELAY ? 'relay' : 'all' } });
 
 function randomId(n = 8) {
   const abc = 'abcdefghijkmnpqrstuvwxyz23456789'; // 読み違えやすい l, o, 0, 1 は使わない
@@ -120,7 +123,30 @@ export function padLink(hostId, { onStatus = () => {}, onMessage = () => {} } = 
   const GIVE_UP = 10000, TIMEOUT = 5000;
   let peer = null, conn = null, seq = 0, status = '';
   let lastPong = 0, downSince = performance.now(), retryTimer = 0, retryWait = 1000;
-  const api = { rtt: null, thrust, get open() { return !!(conn && conn.open); } };
+  let lastErr = '';
+  const api = { rtt: null, route: '', thrust, detail, get open() { return !!(conn && conn.open); } };
+
+  // つながらないときに、どこで止まっているかを短く表す（例：「中継 ✓ · ICE checking · peer-unavailable」）
+  //   中継    = PeerJS Cloud（最初のつなぎ込み）に入れたか
+  //   ICE     = 端末どうしの通り道を探している状態（new → checking → connected / failed）
+  function detail() {
+    const sig = peer && peer.open ? '✓' : '…';
+    const pc = conn && conn.peerConnection;
+    const ice = pc ? pc.iceConnectionState : '-';
+    return `v${VERSION} · signal ${sig} · ICE ${ice}${lastErr ? ' · ' + lastErr : ''}`;
+  }
+  // つながったら、直接か中継（relay）かを調べる
+  async function findRoute(c) {
+    try {
+      const stats = await c.peerConnection.getStats();
+      let pair = null;
+      stats.forEach(r => { if (r.type === 'transport' && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId); });
+      if (!pair) stats.forEach(r => { if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') pair = r; });
+      const local = pair && stats.get(pair.localCandidateId), remote = pair && stats.get(pair.remoteCandidateId);
+      const relay = [local, remote].some(x => x && x.candidateType === 'relay');
+      api.route = pair ? (relay ? 'relay' : 'direct') : '';
+    } catch { api.route = ''; }
+  }
 
   function set(s) { if (s !== status) { status = s; onStatus(s); } }
   function showDown() { set(performance.now() - downSince > GIVE_UP ? 'error' : 'connecting'); }
@@ -135,6 +161,7 @@ export function padLink(hostId, { onStatus = () => {}, onMessage = () => {} } = 
     peer.on('disconnected', () => { if (!api.open) schedule(); });
     peer.on('error', err => {
       // peer-unavailable = ホストがまだいない・閉じた。それ以外は中継サーバーの不調など
+      lastErr = err.type;
       if (err.type !== 'peer-unavailable') console.warn('[link]', err.type, err);
       if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(err.type)) {
         try { peer.destroy(); } catch {}
@@ -150,7 +177,8 @@ export function padLink(hostId, { onStatus = () => {}, onMessage = () => {} } = 
     conn = c;
     c.on('open', () => {
       if (conn !== c) return;
-      retryWait = 1000; lastPong = performance.now();
+      retryWait = 1000; lastPong = performance.now(); lastErr = '';
+      setTimeout(() => findRoute(c), 1500);
       c.send({ t: 'hello', v: PROTOCOL });
       set('linked');
       ping();
@@ -162,8 +190,8 @@ export function padLink(hostId, { onStatus = () => {}, onMessage = () => {} } = 
     });
     c.on('close', () => lost(c));
     c.on('error', () => lost(c));
-    // つなぎ込みが返ってこないこともある
-    setTimeout(() => { if (conn === c && !c.open) lost(c); }, 6000);
+    // つなぎ込みが返ってこないこともある。中継を通るときは通り道が決まるまで時間がかかるので長めに待つ
+    setTimeout(() => { if (conn === c && !c.open) lost(c); }, 15000);
   }
 
   function lost(c) {

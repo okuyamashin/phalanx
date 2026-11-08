@@ -13,6 +13,8 @@
   body { display:flex; flex-direction:column; align-items:center; justify-content:center; }
   #status { position:fixed; top:12px; left:0; right:0; text-align:center; font-size:13px; color:#f2e8d2aa;
     font-family: ui-monospace, Menlo, monospace; }
+  #detail { margin-top:4px; font-size:10px; opacity:.6; }
+  body.linked #detail { display:none; }
   #status .dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:#777; margin-right:6px; vertical-align:1px; }
   body.linked #status .dot { background:#6fd06f; }
   body.error #status .dot, body.closed #status .dot { background:#e04848; }
@@ -30,12 +32,12 @@
 </style>
 </head>
 <body>
-<div id="status"><span class="dot"></span><span id="txt">…</span></div>
+<div id="status"><span class="dot"></span><span id="txt">…</span><div id="detail"></div></div>
 <div id="btn"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script>
 <script type="module">
-import { padLink } from './src/link.js';
+import { padLink } from './src/link.js?v=5'; // ?v= を上げると、ブラウザに残った古いファイルを使わない
 
 const hostId = location.hash.slice(1).replace(/[^a-z0-9]/g, '');
 const txt = document.getElementById('txt'), btn = document.getElementById('btn');
@@ -56,7 +58,7 @@ function render() {
 }
 function setStatus(s) {
   conn = s; render();
-  txt.textContent = s === 'linked' ? (link.rtt == null ? 'linked' : Math.round(link.rtt) + ' ms') : s === 'connecting' ? '…' : '✕';
+  txt.textContent = s === 'linked' ? (link.rtt == null ? 'linked' : Math.round(link.rtt) + ' ms' + (link.route ? ' · ' + link.route : '')) : s === 'connecting' ? '…' : '✕';
 }
 
 let link = { rtt: null, thrust: () => false };
@@ -79,6 +81,10 @@ btn.addEventListener('pointerdown', e => {
   setTimeout(() => btn.classList.remove('hit'), 90);
 });
 addEventListener('contextmenu', e => e.preventDefault());
+
+// つながらないときは、どこで止まっているかを小さく出す（原因を調べるため）
+const detailEl = document.getElementById('detail');
+setInterval(() => { if (link.detail) detailEl.textContent = link.detail(); }, 500);
 
 // 画面が消えると接続が切れるので、つながっている間は画面をつけたままにする（対応している端末だけ）。
 // 画面に戻ってくると解除されているので、そのたびに頼み直す

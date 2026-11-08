@@ -136,7 +136,7 @@
 // スプライト（疑似3D）の見た目を、src/game.js のルールにつないだ本編。
 // 描画は PixiJS（WebGL）。大量の兵の絵をまとめてGPUに描かせる
 import { CFG, createGame } from './src/game.js';
-import { hostLink } from './src/link.js';
+import { hostLink } from './src/link.js?v=5'; // ?v= を上げると、ブラウザに残った古いファイルを使わない
 import qrcode from 'https://cdn.jsdelivr.net/npm/qrcode-generator@2.0.4/dist/qrcode.mjs';
 
 const PIXI = window.PIXI;
