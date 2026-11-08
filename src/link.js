@@ -9,6 +9,21 @@
 export const PROTOCOL = 1;
 const PREFIX = 'phalanx-';
 
+// ===== 中継サーバー（TURN）=====
+// 同じ Wi-Fi でも、ルーターによっては端末どうしが直接つながれない。そのときは中継サーバーを通す。
+// PeerJS が初期設定で使う中継サーバーは応答しないので、Metered の無料枠（月 20GB）を使う。
+// この資格情報は公開リポジトリから誰でも見える。できるのは中継の利用だけで、
+// 悪用されたら Metered の管理画面で資格情報を作り直し、ここを書き換える。
+const TURN_USER = '02e9fdff2fc159ad4e9c61e5', TURN_PASS = 'xGlgBa0P6Q5PTqM8';
+const iceServers = [
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  { urls: 'turn:global.relay.metered.ca:80', username: TURN_USER, credential: TURN_PASS },
+  { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: TURN_USER, credential: TURN_PASS },
+  { urls: 'turn:global.relay.metered.ca:443', username: TURN_USER, credential: TURN_PASS },
+  { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: TURN_USER, credential: TURN_PASS },
+];
+const peerOpts = () => ({ config: { iceServers } });
+
 function randomId(n = 8) {
   const abc = 'abcdefghijkmnpqrstuvwxyz23456789'; // 読み違えやすい l, o, 0, 1 は使わない
   const b = crypto.getRandomValues(new Uint8Array(n));
@@ -36,7 +51,7 @@ export function hostLink({ onThrust = () => {}, onStatus = () => {}, onRtt = () 
   function send(msg) { if (conn && conn.open) conn.send(msg); }
 
   function start(id) {
-    peer = new Peer(PREFIX + id);
+    peer = new Peer(PREFIX + id, peerOpts());
     onStatus('connecting');
     peer.on('open', () => {
       try { sessionStorage.setItem('phalanx-host', id); } catch {}
@@ -115,7 +130,7 @@ export function padLink(hostId, { onStatus = () => {}, onMessage = () => {} } = 
       if (peer.disconnected) peer.reconnect();
       return;
     }
-    peer = new Peer();
+    peer = new Peer(peerOpts());
     peer.on('open', () => connect());
     peer.on('disconnected', () => { if (!api.open) schedule(); });
     peer.on('error', err => {
