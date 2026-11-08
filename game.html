@@ -115,22 +115,26 @@
 <div id="pips"></div>
 <div id="overlay"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@7.4.2/dist/pixi.min.js"></script>
 <script type="module">
 // スプライト（疑似3D）の見た目を、src/game.js のルールにつないだ本編。
+// 描画は PixiJS（WebGL）。大量の兵の絵をまとめてGPUに描かせる
 import { CFG, createGame } from './src/game.js';
 
+const PIXI = window.PIXI;
 const cv = document.getElementById('c');
-const ctx = cv.getContext('2d');
-let W = 0, H = 0;
-// 描画の細かさ。スマホ（指で操作する端末）は画面がとても細かいので少し下げて、塗る量を減らす
+let W = innerWidth, H = innerHeight;
+// 描画の細かさ。スマホ（指で操作する端末）は画面がとても細かいので少し下げる
 let DPR = 1;
+const calcDpr = () => Math.min(devicePixelRatio || 1, matchMedia('(pointer: coarse)').matches ? 1.5 : 2);
+DPR = calcDpr();
+const renderer = PIXI.autoDetectRenderer({ view: cv, width: W, height: H, resolution: DPR, autoDensity: true,
+  antialias: false, backgroundColor: 0x1a140e, powerPreference: 'high-performance' });
+const stage = new PIXI.Container();
+const world = new PIXI.Container(); stage.addChild(world);   // 画面の揺れはこの入れ物ごと動かす
 function resize() {
-  const coarse = matchMedia('(pointer: coarse)').matches;
-  const dpr = DPR = Math.min(devicePixelRatio || 1, coarse ? 1.25 : 1.5);
-  W = innerWidth; H = innerHeight;
-  cv.width = W * dpr; cv.height = H * dpr;
-  cv.style.width = W + 'px'; cv.style.height = H + 'px';
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  W = innerWidth; H = innerHeight; DPR = calcDpr();
+  renderer.resolution = DPR; renderer.resize(W, H);
 }
 addEventListener('resize', resize); resize();
 
@@ -145,21 +149,12 @@ function loadSprite(name) {
   return Promise.all([
     fetch(`assets/sprites/${name}.json`).then(r => r.json()).then(m => { s.meta = m; }),
     new Promise((ok, ng) => { s.img = new Image(); s.img.onload = ok; s.img.onerror = ng; s.img.src = `assets/sprites/${name}.webp`; }),
-  ]).then(() => { s.levels = makeLevels(s.img); });
-}
-// 奥の小さな兵を描くとき、大きな絵をその都度縮めると重いので、半分・4分の1の絵を先に作っておく
-function makeLevels(img) {
-  const levels = [{ src: img, scale: 1 }];
-  let prev = img, scale = 1;
-  for (let i = 0; i < 2; i++) {
-    scale /= 2;
-    const c = document.createElement('canvas');
-    c.width = Math.ceil(img.width * scale); c.height = Math.ceil(img.height * scale);
-    const g = c.getContext('2d'); g.imageSmoothingQuality = 'high';
-    g.drawImage(prev, 0, 0, c.width, c.height);
-    levels.push({ src: c, scale }); prev = c;
-  }
-  return levels;
+  ]).then(() => {
+    // 縮小用のミップマップを GPU に作らせる（奥の小さな兵がちらつかない）
+    const base = PIXI.BaseTexture.from(s.img, { mipmap: PIXI.MIPMAP_MODES.ON, scaleMode: PIXI.SCALE_MODES.LINEAR });
+    s.tex = {};
+    for (const [name, f] of Object.entries(s.meta.frames)) s.tex[name] = new PIXI.Texture(base, new PIXI.Rectangle(f.x, f.y, f.w, f.h));
+  });
 }
 const BODY_PX = 330;   // 手前の兵の身長（unit=1のときの画面px）
 
@@ -476,21 +471,37 @@ function enemyFrame(e) {
 }
 
 // ===== 描画 =====
+// 「描いた順に重なる」2Dの描き方を、使い回すスプライトの列で再現する。
+// 毎フレーム先頭から順に絵を差し替え、使わなかった残りは隠す
+const spriteLayer = new PIXI.Container();
+const pool = [];
+let poolUsed = 0;
+function put(tex, x, y, w, h, alpha = 1, tint = 0xffffff) {
+  let sp = pool[poolUsed];
+  if (!sp) { sp = new PIXI.Sprite(); pool.push(sp); spriteLayer.addChild(sp); }
+  poolUsed++;
+  sp.texture = tex; sp.visible = true;
+  sp.x = x; sp.y = y; sp.width = w; sp.height = h;
+  sp.alpha = alpha; sp.tint = tint;
+}
+function beginSprites() { poolUsed = 0; }
+function endSprites() { for (let i = poolUsed; i < pool.length; i++) pool[i].visible = false; }
+const canvasTex = c => PIXI.Texture.from(c);
 function drawFrame(sprite, name, x, y, unit, alpha = 1) {
-  const { meta, levels } = SPRITES[sprite];
+  const { meta, tex } = SPRITES[sprite];
   const f = meta.frames[name];
   const k = unit * BODY_PX / meta.height;
-  // 画面上の大きさに足りる、いちばん小さい絵を使う
-  const need = k * DPR;
-  const L = need <= 0.25 ? levels[2] : need <= 0.5 ? levels[1] : levels[0];
-  const m = L.scale;
-  ctx.globalAlpha = alpha;
-  ctx.drawImage(L.src, f.x * m, f.y * m, f.w * m, f.h * m, x - f.anchor * k, y - f.baseline * k, f.w * k, f.h * k);
-  ctx.globalAlpha = 1;
+  put(tex[name], x - f.anchor * k, y - f.baseline * k, f.w * k, f.h * k, alpha);
 }
+// 足元の影（だ円）
+const SHADOW_TEX = (() => {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 32;
+  const g = c.getContext('2d'); g.fillStyle = 'rgb(30,18,8)';
+  g.beginPath(); g.ellipse(64, 16, 62, 14, 0, 0, Math.PI * 2); g.fill();
+  return canvasTex(c);
+})();
 function shadow(x, y, unit, w, a = 0.35) {
-  ctx.fillStyle = `rgba(30,18,8,${a})`;
-  ctx.beginPath(); ctx.ellipse(x, y - 2 * unit, w * unit, 18 * unit, -0.05, 0, Math.PI * 2); ctx.fill();
+  put(SHADOW_TEX, x - w * unit, y - 2 * unit - 18 * unit, w * 2 * unit, 36 * unit, a);
 }
 // 足元の合図の光は、先に1枚ずつ作っておいて使い回す
 const CUE_IMG = {};
@@ -499,10 +510,10 @@ for (const [name, c] of [['red', '255,70,50'], ['gold', '255,215,110']]) {
   const g = cv2.getContext('2d'), r = g.createRadialGradient(64, 32, 0, 64, 32, 64);
   r.addColorStop(0, `rgba(${c},0.8)`); r.addColorStop(1, `rgba(${c},0)`);
   g.setTransform(1, 0, 0, 0.5, 0, 16); g.fillStyle = r; g.fillRect(0, 0, 128, 64);
-  CUE_IMG[name] = cv2;
+  CUE_IMG[name] = canvasTex(cv2);
 }
 function cue(x, y, unit, color) {
-  ctx.drawImage(CUE_IMG[color], x - 95 * unit, y - 26 * unit, 190 * unit, 52 * unit);
+  put(CUE_IMG[color], x - 95 * unit, y - 26 * unit, 190 * unit, 52 * unit);
 }
 function drawUnit(side, file, rank, fr, now) {
   const ally = side === 'ally';
@@ -555,50 +566,69 @@ function getLayers() {
   };
   return layers;
 }
-// 地面：真上から見たテクスチャを、1〜2px の横帯ごとに奥行きに合わせて縮めて貼る
-const groundTex = new Image();
-let groundPat = null;
-groundTex.onload = () => { groundPat = ctx.createPattern(groundTex, 'repeat'); };
-groundTex.src = 'assets/textures/rocky_terrain_02_dry.jpg';
+// 地面：真上から見たテクスチャを、画面の点ごとに奥行きを計算して貼る（GPUのシェーダーで）
 const TILE = 760;      // テクスチャ1枚ぶんの大きさ（ワールドpx）
 const DEPTH_PX = 260;  // 奥行きの縮み具合
-function ground() {
-  const { near, vp, base } = view();
-  const top = Math.ceil(vp.y);
-  if (groundPat) {
-    const S = groundTex.width, step = 2;
-    ctx.fillStyle = groundPat;
-    for (let y = top; y < H; y += step) {
-      const sc = (y + step / 2 - vp.y) / (near.y - vp.y);
-      if (sc <= 0.004) continue;
-      const k = base * sc;                                // 画面px / ワールドpx（この帯での）
-      const cx = vp.x + (near.x - vp.x) * sc - camX * k;  // ワールドx=0 の画面位置
-      const a = TILE * k / S;
-      const v = ((DEPTH_PX / sc) / TILE * S) % S;
-      groundPat.setTransform(new DOMMatrix([a, 0, 0, 1, cx, y - v]));
-      ctx.fillRect(0, y, W, step);
-    }
-  } else {
-    ctx.fillStyle = '#a98756'; ctx.fillRect(0, top, W, H - top);
-  }
-  ctx.drawImage(getLayers().groundLight, 0, 0, W, H);
-}
+const groundTexture = PIXI.Texture.from('assets/textures/rocky_terrain_02_dry.jpg', {
+  wrapMode: PIXI.WRAP_MODES.REPEAT, mipmap: PIXI.MIPMAP_MODES.ON });
+const groundShader = PIXI.Shader.from(`
+  precision highp float;
+  attribute vec2 aVertexPosition;
+  uniform mat3 translationMatrix; uniform mat3 projectionMatrix;
+  uniform vec2 uSize;
+  varying vec2 vPos;
+  void main() {
+    vec2 p = aVertexPosition * uSize; vPos = p;
+    gl_Position = vec4((projectionMatrix * translationMatrix * vec3(p, 1.0)).xy, 0.0, 1.0);
+  }`, `
+  precision highp float;
+  varying vec2 vPos;
+  uniform sampler2D uTex;
+  uniform vec2 uVp; uniform vec2 uNear;
+  uniform float uBase; uniform float uCam; uniform float uTile; uniform float uDepth;
+  void main() {
+    float sc = (vPos.y - uVp.y) / (uNear.y - uVp.y);
+    if (sc <= 0.004) discard;
+    float k = uBase * sc;                                   // 画面px / ワールドpx
+    float cx = uVp.x + (uNear.x - uVp.x) * sc - uCam * k;   // ワールドx=0 の画面位置
+    vec2 uv = vec2((vPos.x - cx) / k, uDepth / sc) / uTile;
+    gl_FragColor = texture2D(uTex, uv);
+  }`, { uTex: groundTexture, uSize: [1, 1], uVp: [0, 0], uNear: [0, 0], uBase: 1, uCam: 0, uTile: TILE, uDepth: DEPTH_PX });
+const groundGeom = new PIXI.Geometry()
+  .addAttribute('aVertexPosition', [0, 0, 1, 0, 1, 1, 0, 1], 2)
+  .addIndex([0, 1, 2, 0, 2, 3]);
+const groundMesh = new PIXI.Mesh(groundGeom, groundShader);
+const skySprite = new PIXI.Sprite(), lightSprite = new PIXI.Sprite();
+const lines = new PIXI.Graphics();
+world.addChild(skySprite, groundMesh, lightSprite, lines, spriteLayer);
+let layersKey = '';
 
 function background() {
-  ctx.drawImage(getLayers().sky, 0, 0, W, H);
-  ground();
+  const L = getLayers();
+  if (layersKey !== L.key) {
+    layersKey = L.key;
+    for (const [sp, c] of [[skySprite, L.sky], [lightSprite, L.groundLight]]) {
+      const old = sp.texture; sp.texture = canvasTex(c);
+      if (old && old !== PIXI.Texture.EMPTY) old.destroy(true);
+      sp.width = W; sp.height = H;
+    }
+  }
+  const { near, vp, base } = view();
+  const u = groundShader.uniforms;
+  u.uSize = [W, H]; u.uVp = [vp.x, vp.y]; u.uNear = [near.x, near.y]; u.uBase = base; u.uCam = camX;
   // 勝ち・負けの線（地面の目印）
-  for (const [line, color] of [[CFG.lineWin, '170,40,30'], [CFG.lineLose, '40,70,130']]) {
+  lines.clear();
+  for (const [line, color] of [[CFG.lineWin, 0xaa281e], [CFG.lineLose, 0x28467f]]) {
     const wx = -(line - CFG.lineStart) * LINE_PX + (line === CFG.lineWin ? GAP + RANK_GAP : -RANK_GAP * 1.5);
     const a = project(0, wx), b = project(FILES + 6, wx);
-    ctx.strokeStyle = `rgba(${color},0.55)`; ctx.lineWidth = 5;
-    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    lines.lineStyle(5, color, 0.55).moveTo(a.x, a.y).lineTo(b.x, b.y);
   }
 }
 
 function draw(dt, now) {
   const S = game.S;
   background();
+  beginSprites();
   for (let f = FILES - 1; f >= 0; f--) {
     for (const c of corpses) if (c.file === f) {
       const p = project(f, c.wx), a = clamp01((7 - c.t) / 1.5);
@@ -623,19 +653,9 @@ function draw(dt, now) {
   }
   for (const q of fx) {
     const p = project(q.file, q.wx);
-    ctx.globalAlpha = clamp01(q.life * 3); ctx.fillStyle = q.color;
-    ctx.fillRect(p.x + q.ox * p.unit - 2, p.y - (q.y - q.oy) * p.unit - 2, 4, 4);
+    put(PIXI.Texture.WHITE, p.x + q.ox * p.unit - 2, p.y - (q.y - q.oy) * p.unit - 2, 4, 4, clamp01(q.life * 3), PIXI.utils.string2hex(q.color));
   }
-  ctx.globalAlpha = 1; ctx.textAlign = 'center';
-  for (const t of texts) {
-    const p = project(t.file, t.wx);
-    ctx.globalAlpha = clamp01(t.life * 2); ctx.fillStyle = t.color;
-    ctx.font = `bold ${Math.max(12, t.size * Math.min(1.3, p.unit * 1.3))}px sans-serif`;
-    ctx.strokeStyle = '#000a'; ctx.lineWidth = 3;
-    const y = p.y - t.y * p.unit;
-    ctx.strokeText(t.text, p.x, y); ctx.fillText(t.text, p.x, y);
-  }
-  ctx.globalAlpha = 1;
+  endSprites();
 }
 
 function updateFx(dt) {
@@ -741,10 +761,10 @@ function loop(now) {
   sfxBudget = 3;
   game.update(dt);
   updateFx(dt);
-  ctx.save();
-  if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+  world.x = shake > 0 ? rand(-shake, shake) : 0;
+  world.y = shake > 0 ? rand(-shake, shake) : 0;
   draw(dt, now / 1000);
-  ctx.restore();
+  renderer.render(stage);
   updateHud();
   requestAnimationFrame(loop);
 }
@@ -753,8 +773,8 @@ for (const n of ['victory', 'defeat']) new Image().src = `assets/screens/${n}.jp
 Promise.all(Object.keys(SPRITES).map(loadSprite))
   .then(() => { showOverlay(); requestAnimationFrame(loop); })
   .catch(err => {
-    ctx.fillStyle = '#f2e8d2'; ctx.font = '16px sans-serif';
-    ctx.fillText('素材を読み込めませんでした。ローカルサーバー経由で開いてください。 ' + err, 20, 40);
+    const ov = document.getElementById('overlay'); ov.classList.remove('hidden');
+    ov.textContent = '素材を読み込めませんでした。ローカルサーバー経由で開いてください。 ' + err;
   });
 </script>
 </body>
