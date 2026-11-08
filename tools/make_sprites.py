@@ -13,6 +13,11 @@ SRC = 'assets/sprites/raw/hoplite_sheet_chatgpt.png'
 OUT_PNG = 'assets/sprites/hoplite.png'
 OUT_JSON = 'assets/sprites/hoplite.json'
 CUTS = [340]  # 元画像のx座標。くっついているポーズを切り離す位置
+# 切り離したあとに他のポーズの破片が残る場所（フレーム名, x0, x1, y0, y1）。元画像の座標。
+# この範囲の暗い画素（槍の柄・こぶし）だけを消し、明るい槍先は残す
+ERASE_DARK = [('guard', 326, 342, 252, 269)]
+# 同じく、明るい灰色の画素（他のポーズの槍先）だけを消す
+ERASE_STEEL = [('windup', 334, 356, 262, 274)]
 NAMES = ['guard', 'windup', 'thrust', 'hit', 'collapse', 'fallen']
 
 def chroma(rgb):
@@ -74,6 +79,15 @@ def main():
         for s in range(1, 3):
             mm[s:] |= m[:-s]; mm[:-s] |= m[s:]; mm[:, s:] |= m[:, :-s]; mm[:, :-s] |= m[:, s:]
         a = np.where(mm, alpha, 0)
+        for name, ex0, ex1, ey0, ey1 in ERASE_DARK:
+            if name == NAMES[k]:
+                lum = im[ey0:ey1, ex0:ex1].astype(np.float32).mean(-1)
+                a[ey0:ey1, ex0:ex1] = np.where(lum < 120, 0, a[ey0:ey1, ex0:ex1])
+        for name, ex0, ex1, ey0, ey1 in ERASE_STEEL:
+            if name == NAMES[k]:
+                px = im[ey0:ey1, ex0:ex1].astype(np.float32)
+                steel = (px[..., 0] > 80) & (px[..., 2] > 80) & (np.abs(px[..., 0] - px[..., 2]) < 40)
+                a[ey0:ey1, ex0:ex1] = np.where(steel, 0, a[ey0:ey1, ex0:ex1])
         ys, xs = np.nonzero(a > 0.02)
         x0, x1, y0, y1 = xs.min() - pad, xs.max() + pad, ys.min() - pad, ys.max() + pad
         x0, y0 = max(0, x0), max(0, y0)
