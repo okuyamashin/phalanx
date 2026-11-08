@@ -36,6 +36,16 @@
 
 画面の数字はギリシャ数字（イオニア式：Αʹ=1、Ιʹ=10、Ρʹ=100）です。左上が味方の残り、右上が敵の残りです。
 
+### Bluetooth のアプリで遊ぶ（Mac × Android）
+
+インターネットを通らず、Bluetooth だけでスマホと Mac をつなぐ版です。Mac アプリ（画面）と Android アプリ（コントローラー）を自分でビルドして使います。どちらも中身は WebView で、`ble.html` と `ble-pad.html` を公開サイトから読み込みます。
+
+1. Android で「Phalanx Pad」を開く（Bluetooth とマイクを許可する）
+2. Mac で「Phalanx」を開くと、右下に近くのコントローラーが出る。電波の強い順に並び、近いものには「近い」が付く
+3. リストで選ぶとつながり、スマホの上に緑の点と「Bluetooth」が出る。あとは Web 版と同じく、ボタン・突き出し・声で突ける
+
+**つながらないとき**：Mac とスマホが以前に Bluetooth でペアリングしていると、Mac が古い鍵で暗号化しようとして失敗し、つなぎ込みを受け付けなくなることがあります。両方の Bluetooth の設定で、相手のペアリングを解除してください。
+
 ## ルールの細かいところ
 
 - 味方は横一列11人。倒れると、後ろの予備兵が前に出て埋める。
@@ -50,6 +60,8 @@
 | `index.html` | **本編**。AIで描いた兵士の絵をコマ送りで動かす疑似3D版。描画は [PixiJS](https://pixijs.com/) 7.4.2（WebGL、MIT ライセンス、CDN から読み込み） |
 | `remote.html` | 本編のコピーで、スマホをコントローラーにつなげる版。QR コードを出す |
 | `pad.html` | スマホで開くコントローラー（ボタン1つ。平らにして突き出しても、声でも突ける） |
+| `ble.html` | 本編のコピーで、Mac アプリの中で動く版（Bluetooth の合図を受ける） |
+| `ble-pad.html` | `pad.html` のコピーで、Android アプリの中で動くコントローラー |
 | `proto2d.html` | 最初に作った2Dの試作（上から見た図） |
 | `game.html` | 以前の本編のURL。トップページへ移動する |
 | `3d.html` | Three.js で作った3Dの試作 |
@@ -73,7 +85,11 @@ src/link.js          スマホとパソコンをつなぐ部品（WebRTC、PeerJ
 src/motion.js        スマホの動きのセンサーで「平らにして突き出す」を見分ける部品
 src/voice.js         スマホのマイクで、短く強い声を見分ける部品
 index.html           本編の描画・演出・入力
-remote.html, pad.html  スマホ操作版のゲーム画面とコントローラー
+remote.html, pad.html  スマホ操作版のゲーム画面とコントローラー（WebRTC）
+ble.html, ble-pad.html アプリ版のゲーム画面とコントローラー（Bluetooth）
+apps/
+  mac/               Mac アプリ（SwiftUI、CoreBluetooth）
+  android/           Android アプリ（Kotlin、外部ライブラリなし）
 assets/
   sprites/           兵士のコマ（hoplite = 味方、persian = 敵）と、元の緑背景のシート（raw/）
   screens/           タイトル・勝敗の絵（raw/ に元のPNG）
@@ -90,6 +106,29 @@ tools/make_sprites.py  緑背景のシートを切り分けてスプライトを
 python3 tools/make_sprites.py            # すべて
 python3 tools/make_sprites.py persian    # 敵だけ
 ```
+
+## アプリをビルドする
+
+**Mac アプリ**（Xcode が必要。自分の Mac で動かすための署名だけを使うので、開発者登録は要りません）
+
+```bash
+cd apps/mac
+xcodebuild -project Phalanx.xcodeproj -scheme Phalanx -configuration Debug -derivedDataPath build build
+open build/Build/Products/Debug/Phalanx.app
+```
+
+開発中に手元のサーバーのページを読むときは `open … --args -url http://localhost:8000/ble.html`。`-autoconnect "Pixel 4 XL"` を足すと、その名前のコントローラーに自動でつなぎます。動きの記録は `~/Library/Containers/jp.engawa.phalanx/Data/Library/Application Support/phalanx.log` に残ります。
+
+**Android アプリ**（Android 12 以上。JDK 17 以上と Android SDK が必要。スマホは USB デバッグを有効にしてつなぐ）
+
+```bash
+cd apps/android
+./gradlew installDebug
+```
+
+開発中に手元のサーバーのページを読むときは、`adb reverse tcp:8000 tcp:8000` のあと `adb shell am start -n jp.engawa.phalanx/.MainActivity --es url http://localhost:8000/ble-pad.html`。
+
+Bluetooth の約束事（サービスと特性の UUID）は、`apps/android/.../PadServer.kt` と `apps/mac/Phalanx/Central.swift` の両方に同じ値で書いています。
 
 ゲームのルールは `src/game.js` にまとめ、見た目（2D・3D・スプライト）や入力（キーボード・タップ）と分けています。将来スマホのセンサーで操作するときも、ルールはそのまま使えます。
 
